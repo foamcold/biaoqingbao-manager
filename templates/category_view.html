@@ -1,0 +1,1114 @@
+<!doctype html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>表情包预览 - {{ category_name }}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css">
+    <style>
+        .image-wall {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); /* Reverted to responsive grid */
+            gap: 1.5rem; /* Increased gap */
+        }
+        .image-card {
+            border: 1px solid #dee2e6;
+            border-radius: .25rem;
+            padding: 0.75rem; /* Increased padding */
+            text-align: center;
+            display: flex;
+            flex-direction: column; /* Arrange items vertically */
+            justify-content: space-between; /* Push actions to bottom */
+            position: relative; /* Needed for potential absolute positioning if required */
+            overflow: hidden; /* Hide actions overflowing initially if using height=0 */
+        }
+        .image-card img {
+            max-width: 100%;
+            height: auto;
+            /* max-height: 160px; */ /* Old height */
+            max-height: 220px; /* Increased preview height */
+            object-fit: contain;
+            margin-bottom: 0.75rem; /* Increased margin */
+            cursor: pointer; /* Indicate clickable for maybe a larger preview later */
+            transition: transform 0.2s ease-in-out; /* Add slight zoom effect on hover */
+        }
+        .image-card:hover img {
+            transform: scale(1.03); /* Slight zoom */
+        }
+        .image-card .filename {
+            font-size: 0.85rem; /* Slightly larger */
+            color: #6c757d;
+            margin-bottom: 0.75rem;
+            word-break: break-all;
+            flex-grow: 1; /* Allow filename area to grow */
+            transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
+            opacity: 1;
+            visibility: visible;
+            /* Ensure it takes up space */
+            min-height: 2.5em; /* Adjust as needed based on font size and line height */
+            display: flex; /* Use flex to center vertically if needed */
+            align-items: center;
+            justify-content: center;
+        }
+        .image-card .actions {
+            display: flex; /* Keep horizontal layout */
+            flex-wrap: nowrap; /* Prevent wrapping */
+            gap: 0.5rem; /* Increased gap between buttons */
+            justify-content: center;
+            align-items: center; /* Align items vertically */
+            transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
+            opacity: 0;
+            visibility: hidden;
+            position: absolute; /* Position over the filename area */
+            bottom: 0.75rem; /* Align with original filename bottom padding */
+            left: 0;
+            right: 0;
+            /* Take up the space filename used */
+            min-height: 2.5em; /* Match filename min-height */
+            display: flex; /* Keep using flex */
+            align-items: center; /* Center buttons vertically */
+            /* Add a subtle background? Optional */
+            /* background-color: rgba(255, 255, 255, 0.9); */
+            /* border-top: 1px solid #eee; */ 
+            padding: 0.2rem 0.5rem; /* Adjust padding for buttons */
+        }
+         /* Ensure buttons have consistent size */
+         .image-card .actions .btn {
+             padding: 0.25rem 0.5rem; 
+             font-size: 0.9rem;
+         }
+        .modal-lg-fullscreen {
+            max-width: 95vw; /* Allow large modal */
+            max-height: 90vh;
+            margin: 1rem auto;
+        }
+        #imagePreviewModal .modal-body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden; /* Prevent scrollbars on body */
+        }
+         #imagePreviewModal .modal-body img {
+             max-width: 100%;
+             max-height: 80vh; /* Limit image height within modal */
+             object-fit: contain;
+         }
+        #imagePreviewModal .modal-footer {
+            justify-content: space-between; /* Space out filename and actions */
+        }
+        #imagePreviewModal .filename-preview {
+             font-size: 0.9rem;
+             color: #6c757d;
+             overflow: hidden;
+             text-overflow: ellipsis;
+             white-space: nowrap;
+             max-width: 50%; /* Limit filename width */
+        }
+        /* Prevent text selection on modal filename */
+        #modalPreviewFilename {
+            user-select: none; /* Standard */
+            -webkit-user-select: none; /* Safari */
+            -moz-user-select: none; /* Firefox */
+            -ms-user-select: none; /* IE/Edge */
+        }
+        .modal-nav-btn {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 2rem;
+            background-color: rgba(0,0,0,0.3);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+            z-index: 1070; /* Increased z-index */
+        }
+        .modal-nav-btn:hover {
+            opacity: 1;
+            color: white;
+        }
+        .modal-nav-prev { left: 10px; }
+        .modal-nav-next { right: 10px; }
+        /* Show actions and hide filename on card hover */
+        .image-card:hover .filename {
+            opacity: 0;
+            visibility: hidden;
+        }
+        .image-card:hover .actions {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* Batch Mode Styles */
+        .batch-controls {
+            display: none; /* Hidden by default */
+        }
+        /* When batch mode is active */
+        body.batch-mode .batch-controls {
+            display: inline-flex; /* Display inline with the toggle button */
+            align-items: center; /* Vertically align items inside */
+            vertical-align: middle; /* Align the container itself with the toggle button */
+            margin-left: 0.5rem; /* Add space between toggle and batch actions */
+        }
+        /* Style selected cards */
+        body.batch-mode .image-card.is-selected {
+            border-color: #0d6efd; /* Bootstrap primary blue */
+            box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+        }
+        /* Dim image when selected? Optional */
+        /* body.batch-mode-active .image-card.is-selected img {
+            opacity: 0.7;
+        } */
+        /* Override hover actions when in batch mode to allow selection */
+        body.batch-mode .image-card:hover .filename {
+             opacity: 1;
+             visibility: visible;
+        }
+        body.batch-mode .image-card:hover .actions {
+            opacity: 0;
+            visibility: hidden;
+        }
+        body.batch-mode .image-card .actions { /* Also hide actions normally in batch mode */
+             display: none;
+         }
+
+        /* Batch mode styles */
+        body.batch-mode .image-card .batch-checkbox {
+            display: block;
+        }
+        body.batch-mode .image-card .card-img-overlay {
+            cursor: pointer; /* Indicate clickable area */
+            background-color: rgba(0, 0, 0, 0.1); /* Slight overlay */
+        }
+        body.batch-mode .image-card .card-body {
+            opacity: 1; 
+            visibility: visible;
+        }
+        body.batch-mode .image-card:hover .card-body {
+            opacity: 1;
+            visibility: visible;
+        }
+         body.batch-mode .image-card .card-actions {
+            display: none; /* Hide individual actions */
+        }
+
+        .batch-actions {
+            display: none; /* Hidden by default */
+            margin-bottom: 1rem;
+        }
+        body.batch-mode .batch-actions {
+            /* display: block; Show in batch mode */
+            display: inline-flex; /* Display inline with the toggle button */
+            align-items: center; /* Vertically align items inside */
+            vertical-align: middle; /* Align the container itself with the toggle button */
+            margin-left: 0.5rem; /* Add space between toggle and batch actions */
+        }
+
+        /* Default visibility for control groups */
+        .batch-mode-controls {
+            display: none;
+        }
+        .normal-mode-controls {
+            display: flex;
+            align-items: center;
+        }
+
+        /* Control group visibility in batch mode */
+        body.batch-mode .batch-mode-controls {
+            display: flex !important; /* Added !important for debugging */
+            align-items: center;
+        }
+        body.batch-mode .normal-mode-controls {
+            display: flex;
+            align-items: center;
+        }
+
+        /* Prevent filename selection on card in batch mode */
+        body.batch-mode .image-card .filename {
+            user-select: none; /* Standard */
+            -webkit-user-select: none; /* Safari */
+            -moz-user-select: none; /* Firefox */
+            -ms-user-select: none; /* IE/Edge */
+        }
+
+        /* Default visibility for category view control groups */
+        .view-batch-controls {
+            display: none;
+            align-items: center;
+            gap: 0.5rem; 
+        }
+        .view-normal-controls {
+            display: inline-flex; /* Or flex if it's the only thing */
+            align-items: center;
+        }
+
+        /* Visibility in batch mode */
+        body.batch-mode .view-batch-controls {
+            display: inline-flex !important; /* Use important if needed */
+        }
+        body.batch-mode .view-normal-controls {
+            display: none !important; /* Use important if needed */
+        }
+
+    </style>
+</head>
+<body>
+<div class="container mt-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <!-- Category Dropdown with Filter -->
+        <div class="dropdown">
+            <button class="btn btn-lg btn-outline-primary dropdown-toggle" type="button" id="categoryDropdownMenuButton" data-bs-toggle="dropdown" aria-expanded="false">
+                分类: {{ category_name }}
+            </button>
+            <ul class="dropdown-menu" aria-labelledby="categoryDropdownMenuButton" id="categoryDropdownMenu">
+                <!-- Filter Input -->
+                <li><input type="text" class="form-control form-control-sm mx-2 mb-2 w-auto" id="categoryFilterInput" placeholder="过滤分类..."></li>
+                <!-- Dropdown Items -->
+                {% if all_categories %}
+                    {% for cat in all_categories %}
+                        <li><a class="dropdown-item {% if cat == category_name %}active{% endif %}" href="{{ url_for('view_category', category_name=cat) }}">{{ cat }}</a></li>
+                    {% endfor %}
+                {% else %}
+                     <li><span class="dropdown-item disabled">无其他分类</span></li>
+                {% endif %}
+            </ul>
+        </div>
+        <!-- End Category Dropdown -->
+
+        <!-- Right side Action Buttons -->
+        <div class="action-buttons-container">
+            <a href="{{ url_for('admin') }}" class="btn btn-secondary btn-lg me-2">返回管理首页</a> <!-- Larger button, Logout removed -->
+        </div>
+    </div>
+
+    <hr class="my-3"> <!-- Added horizontal line -->
+
+    <!-- Per Page Selector and Batch Controls Row -->
+    <div class="d-flex justify-content-between align-items-center mb-3"> <!-- Left/Right alignment -->
+        <!-- Left: Pagination Info -->
+         <div class="pagination-info">
+            {% if total_images > 0 %}
+                {% set start_item = (page - 1) * per_page + 1 %}
+                {% set end_item = page * per_page if page * per_page < total_images else total_images %}
+                显示第 {{ start_item }} - {{ end_item }} 项，共 {{ total_images }} 项
+            {% elif images %}
+                 显示 {{ images|length }} 项
+            {% endif %}
+        </div>
+
+        <!-- Right: Batch Toggle, Batch Actions, Per Page -->
+        <div class="d-flex align-items-center gap-3">
+            <!-- Normal Mode Control (just the toggle button) -->
+            <div class="view-normal-controls">
+               <button type="button" class="btn btn-info btn-sm" id="toggleBatchMode">批量管理</button>
+            </div>
+            <!-- Batch Mode Controls -->
+            <div class="view-batch-controls">
+                 <!-- Order Changed: Select All First -->
+                <div class="form-check form-check-inline align-middle me-2">
+                   <input class="form-check-input" type="checkbox" id="selectAllCheckbox">
+                   <label class="form-check-label" for="selectAllCheckbox">全选/取消</label>
+               </div>
+                <button class="btn btn-danger btn-sm" id="batchDeleteButton" data-bs-toggle="modal" data-bs-target="#batchDeleteConfirmModal">批量删除</button>
+                <!-- Exit button will be moved here by JS -->
+            </div>
+
+            <!-- Per Page Selector -->
+            <div>
+                <label for="perPageSelect" class="form-label me-2">每页显示:</label>
+                <select class="form-select form-select-sm d-inline-block w-auto" id="perPageSelect">
+                    {% for val in allowed_per_page_values %}
+                        <option value="{{ val }}" {% if val == per_page %}selected{% endif %}>{{ val }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <!-- Flash Messages -->
+    <div id="flash-message-container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </div>
+
+    {% if images %}
+        <div class="image-wall mb-4">
+            {% for image in images %}
+                <!-- Add data-filename directly to card for easier selection -->
+                <div class="image-card" data-filename="{{ image.filename }}">
+                     <!-- Checkbox removed -->
+                    <img src="{{ image.view_url }}" 
+                         alt="{{ image.filename }}" 
+                         loading="lazy" 
+                         class="img-thumbnail preview-trigger" 
+                         data-index="{{ loop.index0 }}" 
+                         data-filename="{{ image.filename }}">
+                    <span class="filename">{{ image.filename }}</span>
+                    
+                    <!-- Actions (now hidden in batch mode via CSS) -->
+                    <div class="actions">
+                         <button type="button" class="btn btn-sm btn-outline-warning rename-btn" title="重命名" data-bs-toggle="modal" data-bs-target="#renameModal" data-category-name="{{ category_name }}" data-old-filename="{{ image.filename }}">✏️</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger delete-btn" title="删除" data-category-name="{{ category_name }}" data-filename="{{ image.filename }}">🗑️</button>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="alert alert-info">这个分类下还没有表情包。</div>
+    {% endif %}
+
+    <!-- Pagination Navigation -->
+    {% if total_pages > 1 %}
+    <nav aria-label="Page navigation">
+        <ul class="pagination justify-content-center">
+            <!-- Previous Page Link -->
+            <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+                <a class="page-link" href="{{ url_for('view_category', category_name=category_name, page=page-1, per_page=per_page) }}" aria-label="Previous">
+                    <span aria-hidden="true">&laquo;</span>
+                </a>
+            </li>
+
+            <!-- Page Number Links (Simplified for now, can add ellipsis later if needed) -->
+            {% for page_num in range(1, total_pages + 1) %}
+                <li class="page-item {% if page_num == page %}active{% endif %}">
+                    <a class="page-link" href="{{ url_for('view_category', category_name=category_name, page=page_num, per_page=per_page) }}">{{ page_num }}</a>
+                </li>
+            {% endfor %}
+
+            <!-- Next Page Link -->
+            <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+                <a class="page-link" href="{{ url_for('view_category', category_name=category_name, page=page+1, per_page=per_page) }}" aria-label="Next">
+                    <span aria-hidden="true">&raquo;</span>
+                </a>
+            </li>
+        </ul>
+    </nav>
+    {% endif %}
+    <!-- End Pagination Navigation -->
+
+</div>
+
+<!-- Rename Modal Structure -->
+<div class="modal fade" id="renameModal" tabindex="-1" aria-labelledby="renameModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="renameModalLabel">重命名文件</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>当前文件名: <strong id="renameModalOldFilename"></strong></p>
+        <form id="renameModalForm"> 
+            <!-- Hidden fields to store context -->
+            <input type="hidden" id="renameModalCategoryName" name="category_name_modal">
+            <input type="hidden" id="renameModalOldFilenameHidden" name="old_filename_modal">
+            
+            <div class="mb-3">
+                <label for="renameModalNewFilename" class="form-label">新文件名 (将保留原扩展名):</label>
+                <input type="text" class="form-control" id="renameModalNewFilename" name="new_filename" required>
+            </div>
+            <p class="form-text text-muted">注意: 请勿包含扩展名，系统将自动保留原始扩展名。</p>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="renameModalConfirmBtn">确认重命名</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-labelledby="deleteConfirmModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="deleteConfirmModalLabel">确认删除</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>您确定要删除文件 <strong id="deleteConfirmFilename"></strong> 吗？此操作无法撤销。</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+        <!-- Add ID and data attributes for JS -->
+        <button type="button" class="btn btn-danger" id="deleteConfirmBtn">确认删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Rename Confirmation Modal -->
+<div class="modal fade" id="renameConfirmModal" tabindex="-1" aria-labelledby="renameConfirmModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="renameConfirmModalLabel">确认重命名</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>确定要将文件</p>
+        <p><strong id="renameConfirmOldFilename"></strong></p>
+        <p>重命名为</p>
+        <p><strong id="renameConfirmNewFilename"></strong> 吗?</p>
+        <p class="text-muted">(注意: 将保留原扩展名)</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+        <!-- Add ID and data attributes for JS -->
+        <button type="button" class="btn btn-primary" id="renameConfirmFinalBtn">确认重命名</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Batch Delete Confirmation Modal -->
+<div class="modal fade" id="batchDeleteConfirmModal" tabindex="-1" aria-labelledby="batchDeleteConfirmModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="batchDeleteConfirmModalLabel">确认批量删除</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>确定要删除以下选中的文件吗？此操作无法撤销。</p>
+        <ul id="batchDeleteFileList" class="list-group list-group-sm" style="max-height: 200px; overflow-y: auto;"></ul>
+        <!-- Hidden form for batch delete -->
+        <form id="batchDeleteForm" action="" method="POST" style="display: none;">
+            <!-- Action URL set by JS -->
+            <!-- Filenames will be added here by JS -->
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-danger" id="confirmBatchDeleteButton">确认删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden Form for Delete Actions (Single and Batch) -->
+<form id="deleteImageForm" method="post" style="display: none;">
+    <!-- Filenames will be added dynamically for batch delete -->
+</form>
+
+<!-- Large Image Preview Modal -->
+<div class="modal fade" id="imagePreviewModal" tabindex="-1" aria-labelledby="imagePreviewModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-lg-fullscreen">
+    <div class="modal-content bg-dark text-white">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title" id="imagePreviewModalLabel">图片预览</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body p-0">
+        <!-- Previous Button -->
+        <button class="modal-nav-btn modal-nav-prev" id="previewPrevBtn" title="上一张 (←)">&lt;</button>
+        <!-- Image Container -->
+        <img src="" alt="Large preview" id="modalPreviewImage" class="d-block mx-auto">
+        <!-- Next Button -->
+        <button class="modal-nav-btn modal-nav-next" id="previewNextBtn" title="下一张 (→)">&gt;</button>
+        <!-- Navigation Feedback Message -->
+        <div id="previewNavFeedback" 
+             class="alert alert-info position-absolute bottom-0 start-50 translate-middle-x p-2 mb-3"
+             style="display: none; z-index: 1071; opacity: 0.9;" 
+             role="alert">
+          <!-- Message will be set by JS -->
+        </div>
+      </div>
+      <div class="modal-footer border-secondary">
+         <span id="modalPreviewFilename" class="filename-preview"></span>
+         <div class="modal-actions">
+              <!-- Rename Button -->
+              <button type="button" id="modalRenameBtn" class="btn btn-warning" title="重命名">✏️ 重命名</button>
+              <!-- Delete Button -->
+              <button type="button" id="modalDeleteBtn" class="btn btn-danger" title="删除">🗑️ 删除</button>
+         </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bootstrap Bundle JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Embed data as JSON -->
+<script id="viewData" type="application/json">
+{{ {"category_name": category_name, "images": images} | tojson | safe }}
+</script>
+
+<!-- Main script -->
+<script>
+// Parse embedded JSON data safely
+let categoryName = '';
+let imagesData = [];
+let currentPreviewIndex = -1;
+
+try {
+    const viewDataElement = document.getElementById('viewData');
+    if (viewDataElement && viewDataElement.textContent) {
+        const embeddedData = JSON.parse(viewDataElement.textContent);
+        categoryName = embeddedData.category_name;
+        imagesData = embeddedData.images; // Already contains filename, view_url, download_url
+        console.log('Successfully parsed embedded data:', categoryName, imagesData);
+    } else {
+        console.error('Could not find or parse viewData script tag.');
+    }
+} catch (e) {
+    console.error('Error parsing embedded JSON data:', e);
+    // Handle error gracefully, maybe disable features
+}
+
+// --- Modal References --- 
+const imagePreviewModalElement = document.getElementById('imagePreviewModal');
+const imagePreviewModal = new bootstrap.Modal(imagePreviewModalElement);
+const modalImage = document.getElementById('modalPreviewImage');
+const modalFilenameSpan = document.getElementById('modalPreviewFilename');
+const modalRenameBtn = document.getElementById('modalRenameBtn');
+const modalDeleteBtn = document.getElementById('modalDeleteBtn');
+const previewPrevBtn = document.getElementById('previewPrevBtn');
+const previewNextBtn = document.getElementById('previewNextBtn');
+
+// --- Rename Modal References --- 
+const renameModalElementRef = document.getElementById('renameModal');
+const renameModalRef = new bootstrap.Modal(renameModalElementRef);
+const renameModalOldFilenameSpanRef = document.getElementById('renameModalOldFilename');
+const renameModalNewFilenameInputRef = document.getElementById('renameModalNewFilename');
+const renameModalCategoryInputRef = document.getElementById('renameModalCategoryName');
+const renameModalOldHiddenInputRef = document.getElementById('renameModalOldFilenameHidden');
+const renameConfirmBtnRef = document.getElementById('renameModalConfirmBtn');
+
+// --- Rename Confirmation Modal References --- 
+const renameConfirmModalElement = document.getElementById('renameConfirmModal');
+const renameConfirmModal = new bootstrap.Modal(renameConfirmModalElement);
+const renameConfirmOldFilenameSpan = document.getElementById('renameConfirmOldFilename');
+const renameConfirmNewFilenameSpan = document.getElementById('renameConfirmNewFilename');
+const renameConfirmFinalBtn = document.getElementById('renameConfirmFinalBtn');
+
+// --- Delete Confirmation Modal References --- 
+const deleteConfirmModalElement = document.getElementById('deleteConfirmModal');
+const deleteConfirmModal = new bootstrap.Modal(deleteConfirmModalElement);
+const deleteConfirmFilenameSpan = document.getElementById('deleteConfirmFilename');
+const deleteConfirmBtn = document.getElementById('deleteConfirmBtn');
+
+// --- Hidden Delete Form ---
+const deleteFormRef = document.getElementById('deleteImageForm');
+
+const previewNavFeedback = document.getElementById('previewNavFeedback');
+let feedbackTimeout = null;
+
+// --- Function to Update Preview Modal Content --- 
+function updatePreviewModal(index) {
+    if (!imagesData || index < 0 || index >= imagesData.length) {
+        console.error('Invalid index for preview:', index);
+        return;
+    }
+    currentPreviewIndex = index;
+    const imageData = imagesData[index];
+
+    console.log(`Updating preview to index ${index}: ${imageData.filename}`);
+
+    modalImage.src = imageData.view_url;
+    modalImage.alt = imageData.filename;
+    modalFilenameSpan.textContent = imageData.filename;
+    modalFilenameSpan.title = imageData.filename;
+    modalRenameBtn.dataset.oldFilename = imageData.filename;
+    modalDeleteBtn.dataset.filename = imageData.filename;
+    previewPrevBtn.disabled = (index === 0);
+    previewNextBtn.disabled = (index === imagesData.length - 1);
+}
+
+// --- Function to Show Navigation Feedback ---
+function showNavFeedback(message) {
+    if (feedbackTimeout) {
+        clearTimeout(feedbackTimeout);
+    }
+    previewNavFeedback.textContent = message;
+    previewNavFeedback.style.display = 'block';
+    feedbackTimeout = setTimeout(() => {
+        previewNavFeedback.style.display = 'none';
+    }, 1500); // Show for 1.5 seconds
+}
+
+// --- Event Listeners --- 
+
+// Thumbnail clicks
+document.querySelectorAll('.preview-trigger').forEach(img => {
+    img.addEventListener('click', function() {
+        // Only open modal if NOT in batch mode
+        if (!document.body.classList.contains('batch-mode')) {
+            const index = parseInt(this.dataset.index, 10);
+            if (!isNaN(index)) {
+                console.log(`Thumbnail clicked (non-batch): index ${index}`);
+                updatePreviewModal(index);
+                imagePreviewModal.show();
+            }
+        } else {
+            // Optionally log that the click was ignored due to batch mode
+            console.log('Thumbnail click ignored in batch mode.');
+        }
+    });
+});
+
+// Modal navigation buttons
+previewPrevBtn.addEventListener('click', () => {
+    if (currentPreviewIndex > 0) {
+        updatePreviewModal(currentPreviewIndex - 1);
+    } else {
+        showNavFeedback('已经是第一张图片了'); // Show feedback
+    }
+});
+
+previewNextBtn.addEventListener('click', () => {
+    if (currentPreviewIndex < imagesData.length - 1) {
+        updatePreviewModal(currentPreviewIndex + 1);
+    } else {
+         showNavFeedback('已经是最后一张图片了'); // Show feedback
+    }
+});
+
+// Modal action buttons
+modalRenameBtn.addEventListener('click', function() {
+    const oldFilename = this.dataset.oldFilename;
+    if (!oldFilename) return;
+    console.log(`Modal Rename button clicked for: ${categoryName}/${oldFilename}`);
+    
+    // Populate the rename modal
+    renameModalOldFilenameSpanRef.textContent = oldFilename;
+    renameModalCategoryInputRef.value = categoryName;
+    renameModalOldHiddenInputRef.value = oldFilename;
+    renameModalNewFilenameInputRef.value = oldFilename;
+    
+    renameModalRef.show();
+    renameModalNewFilenameInputRef.focus();
+});
+
+modalDeleteBtn.addEventListener('click', function() {
+    const filename = this.dataset.filename;
+    if (!filename) return;
+    // Populate delete confirm modal
+    deleteConfirmFilenameSpan.textContent = filename;
+    // Store necessary data on the confirm button
+    deleteConfirmBtn.dataset.categoryName = categoryName;
+    deleteConfirmBtn.dataset.filename = filename;
+    // Show delete confirm modal
+    deleteConfirmModal.show();
+});
+
+// Keyboard navigation
+imagePreviewModalElement.addEventListener('shown.bs.modal', () => {
+    console.log('Preview modal shown, adding keydown listener');
+    document.addEventListener('keydown', handleModalKeydown);
+});
+
+imagePreviewModalElement.addEventListener('hidden.bs.modal', () => {
+    console.log('Preview modal hidden, removing keydown listener');
+    document.removeEventListener('keydown', handleModalKeydown);
+});
+
+function handleModalKeydown(event) {
+    if (event.key === 'ArrowLeft') {
+        event.preventDefault(); 
+        if (currentPreviewIndex > 0) {
+            updatePreviewModal(currentPreviewIndex - 1);
+        } else {
+            showNavFeedback('已经是第一张图片了'); // Show feedback
+        }
+    } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        if (currentPreviewIndex < imagesData.length - 1) {
+            updatePreviewModal(currentPreviewIndex + 1);
+        } else {
+            showNavFeedback('已经是最后一张图片了'); // Show feedback
+        }
+    }
+}
+
+// Rename Input Modal -> Confirm Button Click -> Opens Rename Confirm Modal OR Closes if Unchanged
+renameConfirmBtnRef.addEventListener('click', function() {
+    const category = renameModalCategoryInputRef.value;
+    const oldFilename = renameModalOldHiddenInputRef.value;
+    const newFilenameRaw = renameModalNewFilenameInputRef.value.trim();
+
+    if (!newFilenameRaw) { alert('新文件名不能为空！'); return; } 
+    
+    // If filename is unchanged, just hide the modal like cancel was clicked.
+    if (newFilenameRaw === oldFilename) {
+        renameModalRef.hide(); // Hide the modal
+        return; // Exit
+    }
+    
+    // --- Logic for actual rename confirmation --- 
+    renameConfirmOldFilenameSpan.textContent = oldFilename;
+    renameConfirmNewFilenameSpan.textContent = newFilenameRaw;
+    renameConfirmFinalBtn.dataset.categoryName = category;
+    renameConfirmFinalBtn.dataset.oldFilename = oldFilename;
+    renameConfirmFinalBtn.dataset.newFilenameRaw = newFilenameRaw;
+    
+    renameModalRef.hide(); 
+    renameConfirmModal.show(); 
+});
+
+// --- Auto-hide Flash Messages --- 
+document.addEventListener('DOMContentLoaded', (event) => { 
+    const flashMessages = document.querySelectorAll('#flash-message-container .alert');
+    flashMessages.forEach(flashMessage => {
+        setTimeout(() => {
+            const alertInstance = bootstrap.Alert.getOrCreateInstance(flashMessage);
+            if (alertInstance) { alertInstance.close(); } else { flashMessage.remove(); }
+        }, 5000);
+    });
+});
+
+// --- Helper Functions --- 
+function formatBytes(bytes, decimals = 2) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+function escapeHtml(unsafe) {
+    return unsafe
+         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+         .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+function truncateUrl(url, maxLength = 60) {
+    if (url.length <= maxLength) {
+        return url;
+    }
+    const startLength = Math.floor(maxLength * 0.7);
+    const endLength = maxLength - startLength - 3; 
+    return url.substring(0, startLength) + '...' + url.substring(url.length - endLength);
+}
+
+// --- Image Card Action Buttons --- 
+
+// Card Rename Button Click -> Opens Rename Input Modal (Unchanged)
+document.querySelectorAll('.rename-btn').forEach(button => {
+    button.addEventListener('click', function() {
+        const categoryName = this.dataset.categoryName;
+        const oldFilename = this.dataset.oldFilename;
+        console.log(`Card Rename button clicked for: ${categoryName}/${oldFilename}`);
+        // Populate the rename input modal
+        renameModalOldFilenameSpanRef.textContent = oldFilename;
+        renameModalCategoryInputRef.value = categoryName;
+        renameModalOldHiddenInputRef.value = oldFilename;
+        renameModalNewFilenameInputRef.value = oldFilename;
+        // Modal is shown via data-bs-toggle/target
+        // We might need a slight delay for focus if modal isn't shown yet
+        setTimeout(() => renameModalNewFilenameInputRef.focus(), 150); 
+    });
+});
+
+// Card Delete Button Click -> Opens Delete Confirm Modal
+document.querySelectorAll('.delete-btn').forEach(button => {
+    button.addEventListener('click', function() {
+        const categoryName = this.dataset.categoryName;
+        const filename = this.dataset.filename;
+        if (!categoryName || !filename) return;
+        // Populate delete confirm modal
+        deleteConfirmFilenameSpan.textContent = filename;
+        // Store necessary data on the confirm button
+        deleteConfirmBtn.dataset.categoryName = categoryName;
+        deleteConfirmBtn.dataset.filename = filename;
+        // Show delete confirm modal
+        deleteConfirmModal.show();
+    });
+});
+
+// --- Confirmation Modal Button Listeners ---
+
+// Delete Confirmation Modal -> Confirm Button Click
+deleteConfirmBtn.addEventListener('click', function() {
+    const category = this.dataset.categoryName;
+    const filename = this.dataset.filename;
+    if (!category || !filename) {
+        console.error('Missing data on delete confirm button!');
+        return;
+    }
+    console.log(`Delete Confirmed (Modal) for ${category}/${filename}`);
+    const actionUrl = `/admin/delete_image/${encodeURIComponent(category)}/${encodeURIComponent(filename)}`;
+    deleteFormRef.action = actionUrl;
+    deleteFormRef.submit();
+    // No need to hide, page will refresh
+});
+
+// Rename Confirmation Modal -> Final Confirm Button Click
+renameConfirmFinalBtn.addEventListener('click', function() {
+    const category = this.dataset.categoryName;
+    const oldFilename = this.dataset.oldFilename;
+    const newFilenameRaw = this.dataset.newFilenameRaw;
+
+    if (!category || !oldFilename || !newFilenameRaw) {
+        console.error('Missing data on rename final confirm button!');
+        return;
+    }
+
+    console.log(`Rename Confirmed (Final Modal) for ${category}/${oldFilename} to ${newFilenameRaw}`);
+    const actionUrl = `/admin/rename/${encodeURIComponent(category)}/${encodeURIComponent(oldFilename)}`;
+    const tempForm = document.createElement('form');
+    tempForm.method = 'post';
+    tempForm.action = actionUrl;
+    tempForm.style.display = 'none';
+    const newFilenameInput = document.createElement('input');
+    newFilenameInput.type = 'hidden';
+    newFilenameInput.name = 'new_filename';
+    newFilenameInput.value = newFilenameRaw;
+    tempForm.appendChild(newFilenameInput);
+    document.body.appendChild(tempForm);
+    tempForm.submit();
+    // No need to hide, page will refresh
+});
+
+// --- Refined Confirmation Modal Z-index Handling ---
+// Listen for when confirmation modals are about to be shown
+[renameModalElementRef, deleteConfirmModalElement, renameConfirmModalElement].forEach(modalElem => {
+    if (modalElem) { // Ensure element exists
+        modalElem.addEventListener('show.bs.modal', function (event) {
+            // Check if the preview modal is currently shown
+            if (imagePreviewModalElement.classList.contains('show')) {
+                 // Set a fixed high z-index only when needed
+                 console.log(`Setting z-index for ${modalElem.id} because preview modal is open.`);
+                 modalElem.style.zIndex = '1060'; 
+            }
+        });
+
+        // Listen for when confirmation modals are hidden
+        modalElem.addEventListener('hidden.bs.modal', function(event) {
+           // Reset z-index when the modal is closed
+           console.log(`Resetting z-index for ${modalElem.id}.`);
+           modalElem.style.zIndex = ''; 
+        });
+    }
+});
+
+// --- Handle Per Page Change --- 
+const perPageSelect = document.getElementById('perPageSelect');
+if (perPageSelect) {
+    perPageSelect.addEventListener('change', function() {
+        const newPerPage = this.value;
+        const currentUrl = new URL(window.location.href);
+        // Reset page to 1 when changing items per page
+        currentUrl.searchParams.set('page', '1'); 
+        currentUrl.searchParams.set('per_page', newPerPage);
+        window.location.href = currentUrl.toString();
+    });
+}
+
+// --- Filter Category Dropdown ---
+const categoryFilterInput = document.getElementById('categoryFilterInput');
+const categoryDropdownMenu = document.getElementById('categoryDropdownMenu');
+
+if (categoryFilterInput && categoryDropdownMenu) {
+    const categoryItems = categoryDropdownMenu.querySelectorAll('li > a.dropdown-item'); // Select only actual links
+
+    // Prevent dropdown from closing when clicking input
+    categoryFilterInput.addEventListener('click', function(e) {
+        e.stopPropagation();
+    });
+
+    categoryFilterInput.addEventListener('input', function() {
+        const filterText = this.value.trim().toLowerCase();
+        
+        categoryItems.forEach(item => {
+            const categoryText = item.textContent.toLowerCase();
+            const listItem = item.parentElement; // Get the <li> element
+
+            if (categoryText.includes(filterText)) {
+                listItem.style.display = ''; // Show
+            } else {
+                listItem.style.display = 'none'; // Hide
+            }
+        });
+    });
+}
+
+// --- Batch Mode State & Toggle ---
+const toggleBatchModeButton = document.getElementById('toggleBatchMode');
+const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+const batchDeleteModalElement = document.getElementById('batchDeleteConfirmModal');
+const batchDeleteFileList = document.getElementById('batchDeleteFileList');
+const batchDeleteForm = document.getElementById('batchDeleteForm');
+const confirmBatchDeleteButton = document.getElementById('confirmBatchDeleteButton');
+// Get containers for moving the button
+const viewBatchControls = document.querySelector('.view-batch-controls'); 
+const viewNormalControls = document.querySelector('.view-normal-controls');
+
+
+if (toggleBatchModeButton && viewBatchControls && viewNormalControls) { // Check all elements exist
+    toggleBatchModeButton.addEventListener('click', function() {
+        const isEnteringBatchMode = !document.body.classList.contains('batch-mode');
+        document.body.classList.toggle('batch-mode');
+
+        if (isEnteringBatchMode) {
+            // --- Entering Batch Mode ---
+            this.textContent = '退出管理';
+            this.classList.remove('btn-info');
+            this.classList.add('btn-secondary');
+            // Move button to batch controls
+            viewBatchControls.appendChild(this);
+
+        } else {
+            // --- Exiting Batch Mode ---
+            this.textContent = '批量管理';
+            this.classList.remove('btn-secondary');
+            this.classList.add('btn-info');
+            // Move button back to normal controls
+            viewNormalControls.appendChild(this);
+
+            // Reset selections when exiting batch mode
+            document.querySelectorAll('.image-card.is-selected').forEach(card => {
+                card.classList.remove('is-selected');
+            });
+            if (selectAllCheckbox) {
+                selectAllCheckbox.checked = false;
+                selectAllCheckbox.indeterminate = false;
+            }
+            updateSelectAllState(); // Ensure visual state reset
+        }
+    });
+} else {
+    console.error('Required elements for batch mode toggle not found!');
+}
+
+// --- Selection Logic ---
+
+// Clicking the card toggles selection in batch mode
+document.querySelectorAll('.image-wall .image-card').forEach(card => {
+    const image = card.querySelector('img.preview-trigger'); // Target preview image
+
+    card.addEventListener('click', function(event) {
+        // Only act if in batch mode
+        if (document.body.classList.contains('batch-mode')) { 
+            // Prevent toggling if clicking an action button (though actions are hidden in batch mode by CSS)
+            if (!event.target.closest('.actions')) {
+                this.classList.toggle('is-selected');
+                updateSelectAllState(); // Update select all checkbox state
+            }
+            // IMPORTANT: Prevent modal from showing in batch mode
+            return; 
+        }
+        
+        // Non-batch mode clicks are handled by the .preview-trigger listener now.
+    });
+});
+
+// Select All / Deselect All
+if(selectAllCheckbox) {
+    selectAllCheckbox.addEventListener('change', function() {
+        const isChecked = this.checked;
+        document.querySelectorAll('.image-wall .image-card').forEach(card => {
+            // Add or remove 'is-selected' based on the 'Select All' checkbox state
+            card.classList.toggle('is-selected', isChecked);
+        });
+        updateSelectAllState(); // Need to update state after toggling all
+    });
+} 
+
+// Helper to update select-all checkbox state
+function updateSelectAllState() {
+    if(!selectAllCheckbox) return;
+    const allCards = document.querySelectorAll('.image-wall .image-card');
+    const selectedCards = document.querySelectorAll('.image-wall .image-card.is-selected');
+    const totalCount = allCards.length;
+    const selectedCount = selectedCards.length;
+
+    if (totalCount > 0 && totalCount === selectedCount) {
+        selectAllCheckbox.checked = true;
+        selectAllCheckbox.indeterminate = false;
+    } else if (selectedCount > 0) {
+        selectAllCheckbox.checked = false;
+        selectAllCheckbox.indeterminate = true; // Partially selected
+    } else {
+        selectAllCheckbox.checked = false;
+        selectAllCheckbox.indeterminate = false;
+    }
+}
+
+// --- Batch Delete Modal Preparation & Submission ---
+
+if (batchDeleteModalElement) {
+    batchDeleteModalElement.addEventListener('show.bs.modal', function (event) {
+        const selectedFiles = getSelectedFilenames(); // Use the correct function name
+        batchDeleteFileList.innerHTML = ''; // Clear previous list
+        batchDeleteForm.innerHTML = ''; // Clear previous form inputs
+
+        if (selectedFiles.length === 0) {
+             alert('请至少选择一个文件进行删除。');
+             event.preventDefault(); // Prevent modal from opening
+             return;
+        }
+
+        // Set form action URL dynamically
+        batchDeleteForm.action = `/admin/batch_delete/${encodeURIComponent(categoryName)}`;
+
+        selectedFiles.forEach(filename => {
+            // Populate list in modal body
+            const li = document.createElement('li');
+            li.className = 'list-group-item list-group-item-sm'; // Use Bootstrap list classes
+            li.textContent = filename;
+            batchDeleteFileList.appendChild(li);
+
+            // Directly create the hidden input field
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'filenames[]'; // Ensure the name matches backend expectation
+            input.value = filename;
+            batchDeleteForm.appendChild(input);
+        });
+        // Reset confirm button state
+         if(confirmBatchDeleteButton) {
+             confirmBatchDeleteButton.disabled = false;
+             confirmBatchDeleteButton.textContent = '确认删除';
+         }
+    });
+} else {
+    console.error("Batch Delete Modal element not found!");
+}
+
+// Handle confirm batch delete button click
+if (confirmBatchDeleteButton) {
+    confirmBatchDeleteButton.addEventListener('click', () => {
+        // Check if form has action and children before submitting
+        if (!batchDeleteForm.action || batchDeleteForm.children.length === 0) {
+            // Add more debugging info
+            console.error('Batch delete form is not ready or empty.', 
+                          'Action:', batchDeleteForm.action, 
+                          'Children count:', batchDeleteForm.children.length);
+             // Optionally provide user feedback
+             alert('无法提交删除请求，请重试。');
+             // Hide modal safely
+             const modalInstance = bootstrap.Modal.getInstance(batchDeleteModalElement);
+             if(modalInstance) modalInstance.hide();
+            return;
+        }
+        
+        // Disable button and submit form
+        confirmBatchDeleteButton.disabled = true;
+        confirmBatchDeleteButton.textContent = '删除中...';
+        batchDeleteForm.submit();
+    });
+} else {
+     console.error("Confirm Batch Delete button not found!");
+}
+
+// Helper function to get selected filenames
+function getSelectedFilenames() {
+    // Find selected cards and get their filename from data attribute
+    return Array.from(document.querySelectorAll('.image-wall .image-card.is-selected')).map(card => card.dataset.filename);
+}
+
+</script>
+
+</body>
+</html> 

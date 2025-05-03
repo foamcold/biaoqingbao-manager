@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理员后台</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css">
+    <style>
+        .progress-container {
+            margin-bottom: 10px;
+        }
+        .progress {
+            height: 20px;
+        }
+        .progress-bar {
+            font-size: 0.8rem;
+            line-height: 20px;
+            color: white;
+            text-align: center;
+        }
+         .status-icon {
+            margin-left: 10px;
+            font-size: 1.2rem;
+        }
+        .status-success { color: green; }
+        .status-error { color: red; }
+
+        /* Category Grid Styles */
+        .category-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); /* Responsive grid */
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .category-card {
+            border: 1px solid #dee2e6;
+            border-radius: .25rem;
+            padding: 0.5rem; /* Further reduced padding */
+            display: flex;
+            flex-direction: column; /* Arrange items vertically */
+            justify-content: flex-start; /* Align items to top */
+            text-align: center;
+            position: relative; /* For absolute positioning of actions */
+            overflow: hidden; /* Hide overflowing actions initially */
+        }
+        .category-image-area {
+            /* position: relative; */ /* Not needed with flex */
+            width: 100%;
+            height: 150px; /* Match image height */
+            margin-bottom: 0.5rem; /* Space before name */
+            background-color: #f8f9fa; /* Light background */
+            border-radius: .2rem;
+            display: flex; /* Use flexbox for centering */
+            align-items: center; /* Vertical center */
+            justify-content: center; /* Horizontal center */
+            overflow: hidden; /* Prevent image overflow if somehow larger */
+        }
+        .category-card img {
+            max-width: 100%;
+            max-height: 100%; /* Allow image to shrink to fit container */
+            /* height: 150px; */ /* Removed fixed height, use max-height */
+            object-fit: contain; /* Use contain to see whole image */
+            display: block; /* Ensure it behaves like a block */
+            transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
+            opacity: 1;
+            visibility: visible;
+        }
+        .category-card .category-name {
+            /* font-weight: 500; */ /* Removing bold */
+            font-size: 1rem; /* Increased font size */
+            font-weight: 500; /* Restored font weight */
+            color: #6c757d; /* Grey color */
+            padding-top: 0.25rem; /* Small space above name */
+            word-break: break-all; /* Prevent long names from breaking layout */
+        }
+        .category-card .category-actions {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+            transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
+            opacity: 0;
+            visibility: hidden;
+        }
+        .category-card form {
+            display: inline-block; /* Keep delete button next to view */
+            margin-left: 0.5rem;
+        }
+        .category-card:hover img {
+            opacity: 0;
+            visibility: hidden;
+        }
+        .category-card:hover .category-actions {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* Styles needed from category_view */
+        body.batch-mode .category-card.is-selected {
+            border-color: #0d6efd;
+            box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+        }
+        body.batch-mode .category-card:hover img {
+             opacity: 1; /* Keep image visible */
+             visibility: visible;
+        }
+        body.batch-mode .category-card:hover .category-actions {
+            opacity: 0;
+            visibility: hidden;
+        }
+        body.batch-mode .category-card .category-actions { /* Also hide actions normally in batch mode */
+             display: none;
+        }
+        .batch-actions {
+            display: none; /* Hidden by default */
+        }
+        body.batch-mode .batch-actions {
+            display: inline-flex;
+            align-items: center;
+            vertical-align: middle;
+        }
+
+        /* Default visibility for admin control groups */
+        .admin-batch-controls {
+             display: none;
+             align-items: center;
+             gap: 0.5rem; 
+        }
+        .admin-normal-controls {
+            display: inline-flex; /* Or flex if it's the only thing */
+             align-items: center;
+        }
+
+        /* Visibility in batch mode */
+        body.batch-mode .admin-batch-controls {
+            display: inline-flex !important; /* Use important if needed */
+        }
+        body.batch-mode .admin-normal-controls {
+            display: none !important; /* Use important if needed */
+        }
+    </style>
+</head>
+<body>
+<div class="container mt-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1>管理员后台</h1>
+        <a href="{{ url_for('logout') }}" class="btn btn-secondary btn-lg">登出</a> <!-- Added btn-lg, removed wrongly placed toggle btn -->
+    </div>
+
+    <!-- Flash Messages Container -->
+    <div id="flash-message-container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <!-- Add fade and show classes for potential Bootstrap JS integration -->
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </div>
+
+    <hr>
+
+    <!-- Create and Search Row -->
+    <div class="row mb-3 align-items-end">
+        <!-- Filter Column (Left) -->
+        <div class="col-md-6">
+            <h2>过滤分类</h2>
+             <div class="input-group">
+                 <input type="text" id="categorySearchInput" class="form-control" placeholder="按名称过滤..."> 
+                 <!-- Removed search button -->
+             </div>
+        </div>
+        <!-- Create Column (Right) -->
+         <div class="col-md-6">
+            <h2>创建分类</h2>
+              <form action="{{ url_for('create_category') }}" method="post">
+                  <div class="input-group">
+                      <input type="text" name="category_name" class="form-control" placeholder="输入新分类名称" required>
+                      <button type="submit" class="btn btn-success">创建</button>
+                  </div>
+              </form>
+        </div>
+    </div>
+
+    <!-- Per Page Selector and Batch Controls Row -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <!-- Left: Pagination Info -->
+        <div class="pagination-info">
+            {% if total_categories > 0 %}
+                {% set start_item = (page - 1) * per_page + 1 %}
+                {% set end_item = page * per_page if page * per_page < total_categories else total_categories %}
+                显示第 {{ start_item }} - {{ end_item }} 个分类，共 {{ total_categories }} 个
+            {% endif %}
+        </div>
+
+        <!-- Right: Batch Toggle, Batch Actions, Per Page -->
+        <div class="d-flex align-items-center gap-3">
+            <!-- Normal Mode Control (just the toggle button) -->
+            <div class="admin-normal-controls">
+                <button type="button" class="btn btn-info btn-sm" id="toggleBatchMode">批量管理</button>
+            </div>
+
+            <!-- Batch Mode Controls -->
+            <div class="admin-batch-controls"> 
+                 <!-- Order Changed: Select All First -->
+                 <div class="form-check form-check-inline align-middle me-2">
+                    <input class="form-check-input" type="checkbox" id="selectAllCheckbox">
+                    <label class="form-check-label" for="selectAllCheckbox">全选/取消</label>
+                </div>
+                   <button class="btn btn-danger btn-sm" id="batchDeleteButton" data-bs-toggle="modal" data-bs-target="#batchDeleteConfirmModal">批量删除</button>
+                 <!-- Exit button will be moved here by JS -->
+              </div>
+
+            <!-- Per Page Selector -->
+            <div>
+                <label for="perPageSelect" class="form-label me-2">每页显示:</label>
+                <select class="form-select form-select-sm d-inline-block w-auto" id="perPageSelect">
+                    {% for val in allowed_per_page_values %}
+                        <option value="{{ val }}" {% if val == per_page %}selected{% endif %}>{{ val }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <div class="category-grid" id="categoryGrid">
+        {% if categories %}
+            {% for category in categories %}
+                <div class="category-card" data-category-name="{{ category|lower }}">
+                    <div class="category-image-area">
+                        <img src="{{ url_for('serve_random_emoticon', category_name=category) }}"
+                             alt="{{ category }} preview"
+                             loading="lazy"
+                             onerror="this.style.display='none';"> <!-- Hide if image fails -->
+                        <div class="category-actions">
+                            <a href="{{ url_for('view_category', category_name=category) }}" class="btn btn-sm btn-primary">查看</a>
+                            <form action="{{ url_for('delete_category', category_name=category) }}" method="post" onsubmit="return confirm('确定要删除分类 \'{{ category }}\' 及其所有内容吗？这也会删除其中所有图片！');">
+                                <button type="submit" class="btn btn-danger btn-sm">删除</button>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="category-name">
+                        {{ category }} <!-- Changed to plain text -->
+                    </div>
+                </div>
+            {% endfor %}
+        {% endif %}
+        <!-- If no categories, only the create card will show -->
+    </div>
+
+    <!-- Pagination Navigation -->
+    {% if total_pages > 1 %}
+    <nav aria-label="Page navigation">
+        <ul class="pagination justify-content-center">
+            <!-- Previous Page Link -->
+            <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+                <a class="page-link" href="{{ url_for('admin', page=page-1, per_page=per_page) }}" aria-label="Previous">
+                    <span aria-hidden="true">&laquo;</span>
+                </a>
+            </li>
+
+            <!-- Page Number Links -->
+            {% for page_num in range(1, total_pages + 1) %}
+                <li class="page-item {% if page_num == page %}active{% endif %}">
+                    <a class="page-link" href="{{ url_for('admin', page=page_num, per_page=per_page) }}">{{ page_num }}</a>
+                </li>
+            {% endfor %}
+
+            <!-- Next Page Link -->
+            <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+                <a class="page-link" href="{{ url_for('admin', page=page+1, per_page=per_page) }}" aria-label="Next">
+                    <span aria-hidden="true">&raquo;</span>
+                </a>
+            </li>
+        </ul>
+    </nav>
+    {% endif %}
+    <!-- End Pagination Navigation -->
+
+    <hr>
+    <h2>上传表情包</h2>
+
+    <!-- Upload Mode Toggle Buttons -->
+    <div class="nav nav-pills mb-3" id="upload-tab" role="tablist">
+        <button class="nav-link active" id="pills-local-tab" data-bs-toggle="pill" data-bs-target="#pills-local" type="button" role="tab" aria-controls="pills-local" aria-selected="true">上传本地文件</button>
+        <button class="nav-link" id="pills-url-tab" data-bs-toggle="pill" data-bs-target="#pills-url" type="button" role="tab" aria-controls="pills-url" aria-selected="false">上传 URL</button>
+    </div>
+
+    {% if categories %}
+    <div class="tab-content mb-3 border p-3 rounded" id="upload-tabContent">
+        <!-- Local File Upload Pane -->
+        <div class="tab-pane fade show active" id="pills-local" role="tabpanel" aria-labelledby="pills-local-tab">
+        <form id="fileUploadForm" action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data" class="mb-3 border p-3 rounded">
+            <div class="mb-3">
+                <label for="categorySelectFile" class="form-label">选择分类</label>
+                <select name="category" id="categorySelectFile" class="form-select" required>
+                    <option value="" selected disabled>-- 请选择 --</option>
+                    {% for category in categories %}
+                        <option value="{{ category }}">{{ category }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="mb-3">
+                <label for="fileUploadInput" class="form-label">选择文件 (可多选, {{ ','.join(config.ALLOWED_EXTENSIONS) }})</label>
+                <input type="file" name="file" class="form-control" id="fileUploadInput" required multiple>
+            </div>
+            <div id="file-upload-list" class="mt-2"></div>
+            <button type="submit" class="btn btn-primary">上传选中文件</button>
+        </form>
+        </div>
+
+        <!-- URL Upload Pane -->
+        <div class="tab-pane fade" id="pills-url" role="tabpanel" aria-labelledby="pills-url-tab">
+        <form id="urlUploadForm" action="{{ url_for('upload_url_stream') }}" method="get" class="mb-3 border p-3 rounded">
+             <div class="mb-3">
+                <label for="categorySelectUrl" class="form-label">选择分类</label>
+                <select name="category" id="categorySelectUrl" class="form-select" required>
+                    <option value="" selected disabled>-- 请选择 --</option>
+                    {% for category in categories %}
+                        <option value="{{ category }}">{{ category }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="mb-3">
+                <label for="imageUrlList" class="form-label">图片 URL (每行一个)</label>
+                <textarea name="image_urls" class="form-control" id="imageUrlList" rows="5" placeholder="https://...\nhttps://..." required></textarea>
+            </div>
+            <div id="url-upload-list" class="mt-2"></div>
+            <button type="submit" class="btn btn-success">批量上传 URL</button>
+        </form>
+        </div>
+    </div>
+    {% else %}
+        <p>请先创建至少一个分类才能上传表情包。</p>
+    {% endif %}
+
+</div>
+
+<script>
+// --- Auto-hide Flash Messages --- 
+document.addEventListener('DOMContentLoaded', (event) => {
+    const flashMessages = document.querySelectorAll('#flash-message-container .alert');
+    flashMessages.forEach(flashMessage => {
+        setTimeout(() => {
+            // Use Bootstrap's dismiss method if available, otherwise just remove
+            const alertInstance = bootstrap.Alert.getOrCreateInstance(flashMessage);
+            if (alertInstance) {
+                alertInstance.close(); // Graceful close with fade
+            } else {
+                flashMessage.remove(); // Fallback removal
+            }
+        }, 5000); // 5000 milliseconds = 5 seconds
+    });
+});
+
+// --- DOMContentLoaded dependent scripts ---
+document.addEventListener('DOMContentLoaded', (event) => {
+    // Flash message hiding (already here)
+    const flashMessages = document.querySelectorAll('#flash-message-container .alert');
+    flashMessages.forEach(flashMessage => {
+        setTimeout(() => {
+            const alertInstance = bootstrap.Alert.getOrCreateInstance(flashMessage);
+            if (alertInstance) {
+                alertInstance.close();
+            } else {
+                flashMessage.remove();
+            }
+        }, 5000);
+    });
+
+    // Category Search/Filter (Moved inside)
+    const categorySearchInput = document.getElementById('categorySearchInput');
+    const categoryGrid = document.getElementById('categoryGrid');
+
+    if (categorySearchInput && categoryGrid) {
+        // Select only actual category cards, not the create card
+        const categoryCards = categoryGrid.querySelectorAll('.category-card[data-category-name]'); 
+
+        categorySearchInput.addEventListener('input', function() {
+            const searchTerm = this.value.trim().toLowerCase();
+
+            categoryCards.forEach(card => {
+                const categoryName = card.dataset.categoryName; // Already lowercase
+                const match = categoryName.includes(searchTerm);
+                if (match) {
+                    card.style.display = 'flex'; // Show card (use initial display type)
+                } else {
+                    card.style.display = 'none'; // Hide card
+                }
+            });
+        });
+    } else if (categorySearchInput) {
+         console.warn('Category search input found, but category grid container not found.');
+    }
+
+    // --- Admin Batch Mode Toggle --- 
+    const toggleBatchModeButton = document.getElementById('toggleBatchMode');
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox'); 
+    const adminBatchControls = document.querySelector('.admin-batch-controls');
+    const adminNormalControls = document.querySelector('.admin-normal-controls');
+
+    if (toggleBatchModeButton && adminBatchControls && adminNormalControls) {
+        toggleBatchModeButton.addEventListener('click', function() {
+            const isEnteringBatchMode = !document.body.classList.contains('batch-mode');
+            document.body.classList.toggle('batch-mode');
+
+            if (isEnteringBatchMode) {
+                this.textContent = '退出管理';
+                this.classList.remove('btn-info');
+                this.classList.add('btn-secondary');
+                // Move button to batch controls (at the end)
+                adminBatchControls.appendChild(this);
+            } else {
+                this.textContent = '批量管理';
+                this.classList.remove('btn-secondary');
+                this.classList.add('btn-info');
+                // Move button back to normal controls
+                adminNormalControls.appendChild(this); // Append is fine if it's the only element
+                // Reset selections when exiting
+                document.querySelectorAll('.category-card.is-selected').forEach(card => {
+                    card.classList.remove('is-selected');
+                });
+                if (selectAllCheckbox) {
+                     selectAllCheckbox.checked = false;
+                     selectAllCheckbox.indeterminate = false;
+                }
+                // updateSelectAllState(); // Call if needed, ensures visual reset
+            }
+        });
+    } else {
+        console.error('Required elements for admin batch mode toggle not found.');
+    }
+
+    // --- Selection Logic (Admin Page) ---
+    if (categoryGrid) {
+        const categoryCardsForSelection = categoryGrid.querySelectorAll('.category-card[data-category-name]');
+        categoryCardsForSelection.forEach(card => {
+            card.addEventListener('click', function(event) {
+                if (document.body.classList.contains('batch-mode')) {
+                    // Prevent selection if clicking an action button area (even if hidden)
+                    if (!event.target.closest('.category-actions') && !event.target.closest('form') && !event.target.closest('a')) {
+                         this.classList.toggle('is-selected');
+                         updateSelectAllState();
+                    }
+                    // Prevent default link navigation in batch mode if name is clicked
+                    if (event.target.closest('.category-name a')) {
+                        event.preventDefault();
+                    }
+                } else {
+                    // In non-batch mode, allow default link behavior (handled by <a> tag)
+                    // Filtering is handled by the separate input listener
+                }
+            });
+        });
+    }
+
+    // --- Select All / Deselect All (Admin Page) ---
+    if(selectAllCheckbox) {
+        selectAllCheckbox.addEventListener('change', function() {
+            const isChecked = this.checked;
+            document.querySelectorAll('.category-grid .category-card[data-category-name]').forEach(card => {
+                 // Only toggle visible cards if filtering is active? (Optional complexity)
+                 // For now, toggle all cards matching filter (or all if no filter)
+                 if (card.style.display !== 'none') { // Check if card is visible
+                     card.classList.toggle('is-selected', isChecked);
+                 }
+            });
+            updateSelectAllState(); // Update indeterminate state
+        });
+    } 
+
+    // --- Helper to update select-all checkbox state (Admin Page) ---
+    function updateSelectAllState() {
+        if(!selectAllCheckbox) return;
+        // Consider only visible cards for select all state
+        const visibleCards = document.querySelectorAll('.category-grid .category-card[data-category-name]:not([style*="display: none"])');
+        const selectedVisibleCards = document.querySelectorAll('.category-grid .category-card.is-selected:not([style*="display: none"])');
+        const totalVisibleCount = visibleCards.length;
+        const selectedVisibleCount = selectedVisibleCards.length;
+
+        if (totalVisibleCount > 0 && totalVisibleCount === selectedVisibleCount) {
+            selectAllCheckbox.checked = true;
+            selectAllCheckbox.indeterminate = false;
+        } else if (selectedVisibleCount > 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = true;
+        } else {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+        }
+    }
+
+    // --- Batch Delete Modal Preparation & Submission (Admin Page) ---
+    const batchDeleteModalElement = document.getElementById('batchDeleteConfirmModal'); // Assuming modal exists or will be added
+    const batchDeleteFileList = document.getElementById('batchDeleteFileList'); // Assuming exists
+    const batchDeleteForm = document.getElementById('batchDeleteForm'); // Assuming exists
+    const confirmBatchDeleteButton = document.getElementById('confirmBatchDeleteButton'); // Assuming exists
+
+    // Helper function to get selected category names
+    function getSelectedCategoryNames() {
+        return Array.from(document.querySelectorAll('.category-grid .category-card.is-selected'))
+                    .map(card => card.dataset.categoryName);
+    }
+
+    if (batchDeleteModalElement && batchDeleteFileList && batchDeleteForm && confirmBatchDeleteButton) {
+        // Populate batch delete modal
+        batchDeleteModalElement.addEventListener('show.bs.modal', function (event) {
+            const selectedCategories = getSelectedCategoryNames();
+            batchDeleteFileList.innerHTML = ''; 
+            batchDeleteForm.innerHTML = ''; 
+
+            if (selectedCategories.length === 0) {
+                 alert('请至少选择一个分类进行删除。');
+                 event.preventDefault(); 
+                 return;
+            }
+
+            // Set form action URL dynamically
+            batchDeleteForm.action = `{{ url_for('batch_delete_categories') }}`;
+
+            selectedCategories.forEach(categoryName => {
+                // Populate list in modal body
+                const li = document.createElement('li');
+                li.className = 'list-group-item list-group-item-sm';
+                li.textContent = categoryName;
+                batchDeleteFileList.appendChild(li);
+
+                // Add hidden input to form
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'category_names[]'; // Match backend expectation
+                input.value = categoryName;
+                batchDeleteForm.appendChild(input);
+            });
+            confirmBatchDeleteButton.disabled = false;
+            confirmBatchDeleteButton.textContent = '确认删除';
+        });
+
+        // Handle confirm batch delete button click
+        confirmBatchDeleteButton.addEventListener('click', () => {
+            if (!batchDeleteForm.action || batchDeleteForm.children.length === 0) {
+                console.error('Batch delete form is not ready or empty.', batchDeleteForm.action, batchDeleteForm.children.length);
+                alert('无法提交删除请求，请重试。');
+                const modalInstance = bootstrap.Modal.getInstance(batchDeleteModalElement);
+                if(modalInstance) modalInstance.hide();
+                return;
+            }
+            confirmBatchDeleteButton.disabled = true;
+            confirmBatchDeleteButton.textContent = '删除中...';
+            batchDeleteForm.submit();
+        });
+    } else {
+        console.warn('One or more elements required for category batch delete modal not found.');
+    }
+
+    // --- Handle Per Page Change (Admin Page) ---
+    const perPageSelect = document.getElementById('perPageSelect');
+    if (perPageSelect) {
+        perPageSelect.addEventListener('change', function() {
+            const newPerPage = this.value;
+            const currentUrl = new URL(window.location.href);
+            currentUrl.searchParams.set('page', '1'); 
+            currentUrl.searchParams.set('per_page', newPerPage);
+            window.location.href = currentUrl.toString();
+        });
+    } 
+
+    // Initial update for select all state if page loads in batch mode (unlikely but safe)
+    if (document.body.classList.contains('batch-mode')) {
+        updateSelectAllState();
+    }
+
+    // Add console logs or other checks if needed
+});
+</script>
+
+<!-- Add Bootstrap Bundle JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Batch Delete Modal Structure (Needs to be added if not present) -->
+<div class="modal fade" id="batchDeleteConfirmModal" tabindex="-1" aria-labelledby="batchDeleteConfirmModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="batchDeleteConfirmModalLabel">确认批量删除分类</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>确定要删除以下选中的分类及其所有内容吗？此操作无法撤销。</p>
+        <ul id="batchDeleteFileList" class="list-group list-group-sm" style="max-height: 200px; overflow-y: auto;"></ul>
+        <!-- Hidden form for batch delete -->
+        <form id="batchDeleteForm" action="" method="POST" style="display: none;">
+            <!-- category_names[] inputs added by JS -->
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-danger" id="confirmBatchDeleteButton">确认删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html> 
