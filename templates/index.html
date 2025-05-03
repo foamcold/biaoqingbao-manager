@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>表情包管理器</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+        .center-card {
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .icon-link {
+            font-size: 1.5rem; /* Adjust icon size */
+            text-decoration: none;
+            color: inherit;
+        }
+        .icon-link:hover {
+            color: var(--bs-primary);
+        }
+        .category-link {
+            margin-right: 10px;
+            margin-bottom: 5px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <!-- Flash messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div id="flash-messages" class="position-fixed top-0 start-50 translate-middle-x p-3" style="z-index: 1055">
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        <!-- Card 1: Project Info & Admin Link -->
+        <div class="card center-card mb-4 shadow-sm">
+            <div class="card-body d-flex justify-content-between align-items-start">
+                <div>
+                    <h3 class="card-title mb-2">表情包管理器 (Biaoqingbao Manager)</h3>
+                    <p class="card-text text-muted">一个简单的基于 Flask 的 Web 应用，用于管理和分享您的表情包收藏。</p>
+                </div>
+                {% if logged_in %}
+                    <a href="{{ url_for('admin') }}" class="icon-link ms-3" title="前往管理页面">
+                        <i class="bi bi-gear-fill"></i>
+                    </a>
+                {% else %}
+                     <a href="{{ url_for('login') }}" class="icon-link ms-3" title="登录">
+                        <i class="bi bi-box-arrow-in-right"></i>
+                    </a>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Card 2: Base URL & Categories -->
+        <div class="card center-card shadow-sm">
+            <div class="card-body">
+                <h5 class="card-title mb-3">访问路径</h5>
+                <p class="card-text">
+                    <strong>基础 URL:</strong> <code class="user-select-all">{{ base_url }}</code>
+                </p>
+                <p class="card-text">
+                    <strong>表情包路径:</strong>
+                    {% if categories %}
+                        {% for category in categories %}
+                            <a href="{{ url_for('serve_random_emoticon', category_name=category) }}" class="btn btn-sm btn-outline-secondary category-link" target="_blank">
+                                /{{ category }}
+                            </a>
+                        {% endfor %}
+                    {% else %}
+                        <span class="text-muted">暂无分类。请登录后在管理页面创建。</span>
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Auto-hide flash messages after 5 seconds
+        const flashMessages = document.getElementById('flash-messages');
+        if (flashMessages) {
+            setTimeout(() => {
+                const alerts = flashMessages.querySelectorAll('.alert');
+                alerts.forEach(alert => {
+                    const bsAlert = new bootstrap.Alert(alert);
+                    bsAlert.close();
+                });
+            }, 5000);
+        }
+    </script>
+</body>
+</html> 

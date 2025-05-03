@@ -50,7 +50,25 @@ def is_valid_category_name(name):
 
 @app.route('/')
 def index():
-    return "表情包项目首页，请访问 /分类名 查看随机表情包，或访问 /admin 进行管理。"
+    """主页，显示项目信息和分类列表。"""
+    base_url = request.host_url
+    categories = []
+    if os.path.exists(app.config['EMOTICONS_FOLDER']):
+        try:
+            # 只列出目录
+            categories = sorted([d for d in os.listdir(app.config['EMOTICONS_FOLDER'])
+                                 if os.path.isdir(os.path.join(app.config['EMOTICONS_FOLDER'], d))])
+        except OSError as e:
+            flash(f"无法读取表情包目录: {e}", "danger")
+            categories = [] # 出错时返回空列表
+
+    # 检查登录状态
+    logged_in = 'logged_in' in session
+
+    return render_template('index.html',
+                           base_url=base_url,
+                           categories=categories,
+                           logged_in=logged_in)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -59,16 +77,17 @@ def login():
         if password == app.config['ADMIN_PASSWORD']:
             session['logged_in'] = True
             flash('登录成功!', 'success')
-            return redirect(url_for('admin'))
+            return redirect(url_for('index'))
         else:
             flash('密码错误!', 'danger')
     return render_template('login.html')
 
 @app.route('/logout')
 def logout():
+    """处理用户登出。"""
     session.pop('logged_in', None)
     session.pop('last_shown', None) # Clear last shown for all categories on logout
-    flash('已登出。', 'info')
+    flash('您已成功登出。', 'info')
     return redirect(url_for('index'))
 
 @app.route('/admin')
