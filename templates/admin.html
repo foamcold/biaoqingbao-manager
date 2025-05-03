@@ -574,6 +574,264 @@ document.addEventListener('DOMContentLoaded', (event) => {
         });
     } 
 
+    // --- Local File Upload Handling ---
+    const fileUploadForm = document.getElementById('fileUploadForm');
+    const fileUploadInput = document.getElementById('fileUploadInput');
+    const categorySelectFile = document.getElementById('categorySelectFile');
+    const fileUploadList = document.getElementById('file-upload-list');
+
+    if (fileUploadForm && fileUploadInput && categorySelectFile && fileUploadList) {
+        fileUploadForm.addEventListener('submit', function(event) {
+            event.preventDefault(); // Prevent default form submission
+
+            const files = fileUploadInput.files;
+            const category = categorySelectFile.value;
+            const uploadUrl = this.action;
+
+            if (!category) {
+                addFlashMessage('请先选择一个分类。', 'warning');
+                return;
+            }
+
+            if (files.length === 0) {
+                addFlashMessage('请至少选择一个文件。', 'warning');
+                return;
+            }
+
+            // Clear previous uploads in the list for this batch
+            // fileUploadList.innerHTML = ''; 
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('category', category);
+
+                // Create progress display for this file
+                const fileId = `file-${Date.now()}-${i}`;
+                const progressElement = createProgressElement(fileId, file.name);
+                fileUploadList.appendChild(progressElement);
+                const progressBar = progressElement.querySelector('.progress-bar');
+                const statusIcon = progressElement.querySelector('.status-icon');
+
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', uploadUrl, true);
+
+                xhr.upload.onprogress = function(e) {
+                    if (e.lengthComputable) {
+                        const percentComplete = Math.round((e.loaded / e.total) * 100);
+                        progressBar.style.width = percentComplete + '%';
+                        progressBar.textContent = percentComplete + '%';
+                    }
+                };
+
+                xhr.onload = function() {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        try {
+                            const response = JSON.parse(xhr.responseText);
+                            if (response.status === 'success') {
+                                progressBar.classList.add('bg-success');
+                                progressBar.textContent = '完成';
+                                statusIcon.className = 'status-icon status-success bi bi-check-circle-fill'; // Bootstrap icon
+                                // Optionally add a flash message
+                                // addFlashMessage(response.message, 'success');
+                            } else {
+                                // Handle backend error (e.g., category not found, wrong file type)
+                                progressBar.classList.add('bg-danger');
+                                progressBar.textContent = '错误';
+                                statusIcon.className = 'status-icon status-error bi bi-x-circle-fill'; // Bootstrap icon
+                                addFlashMessage(`${response.filename || file.name}: ${response.message}`, 'danger');
+                            }
+                        } catch (e) {
+                             // Handle JSON parsing error
+                             progressBar.classList.add('bg-danger');
+                             progressBar.textContent = '响应错误';
+                             statusIcon.className = 'status-icon status-error bi bi-exclamation-triangle-fill';
+                             addFlashMessage(`处理 ${file.name} 响应失败: ${e}`, 'danger');
+                             console.error("JSON parse error:", e, xhr.responseText);
+                        }
+                    } else {
+                        // Handle HTTP error
+                        progressBar.classList.add('bg-danger');
+                        progressBar.textContent = `错误 ${xhr.status}`;
+                        statusIcon.className = 'status-icon status-error bi bi-exclamation-triangle-fill';
+                        addFlashMessage(`上传 ${file.name} 失败: 服务器错误 ${xhr.status}`, 'danger');
+                        console.error("HTTP error:", xhr.status, xhr.statusText);
+                    }
+                };
+
+                xhr.onerror = function() {
+                    // Handle network error
+                    progressBar.classList.add('bg-danger');
+                    progressBar.textContent = '网络错误';
+                    statusIcon.className = 'status-icon status-error bi bi-wifi-off';
+                    addFlashMessage(`上传 ${file.name} 失败: 网络错误`, 'danger');
+                    console.error("Network error");
+                };
+
+                xhr.send(formData);
+            }
+             // Clear the file input after starting uploads
+             fileUploadInput.value = '';
+        });
+    }
+
+    // --- URL Upload SSE Handling ---
+    const urlUploadForm = document.getElementById('urlUploadForm');
+    const urlCategorySelect = document.getElementById('categorySelectUrl');
+    const urlListTextArea = document.getElementById('imageUrlList');
+    const urlUploadList = document.getElementById('url-upload-list');
+
+    if (urlUploadForm && urlCategorySelect && urlListTextArea && urlUploadList) {
+         urlUploadForm.addEventListener('submit', function(event) {
+             event.preventDefault();
+             const category = urlCategorySelect.value;
+             const urls = urlListTextArea.value.trim();
+             const baseUrl = this.action; // Gets the base /admin/upload_url_stream
+
+             if (!category) {
+                 addFlashMessage('请先选择一个分类。', 'warning');
+                 return;
+             }
+             if (!urls) {
+                 addFlashMessage('请输入至少一个 URL。', 'warning');
+                 return;
+             }
+
+             // Clear previous list
+             urlUploadList.innerHTML = '';
+
+             // Construct the URL with query parameters
+             const fullUrl = `${baseUrl}?category=${encodeURIComponent(category)}&urls=${encodeURIComponent(urls)}`;
+
+             const evtSource = new EventSource(fullUrl);
+
+             evtSource.addEventListener('message', function(e) {
+                 const data = JSON.parse(e.data);
+                 console.log("SSE Message:", data);
+                 if (data.type === 'info') {
+                     // Maybe display a general status message
+                     addFlashMessage(data.message, 'info');
+                 }
+             });
+
+            evtSource.addEventListener('progress', function(e) {
+                const data = JSON.parse(e.data);
+                console.log("SSE Progress:", data);
+                let progressElement = document.getElementById(data.id);
+
+                if (!progressElement) {
+                    progressElement = createProgressElement(data.id, data.url);
+                    urlUploadList.appendChild(progressElement);
+                }
+
+                const progressBar = progressElement.querySelector('.progress-bar');
+                const statusIcon = progressElement.querySelector('.status-icon');
+                const statusText = progressElement.querySelector('.file-name'); // Update text to show URL status
+
+                statusText.textContent = `${data.url} (${data.status})`;
+
+                if (data.status === '准备中') {
+                    progressBar.style.width = '0%';
+                    progressBar.textContent = '0%';
+                    progressBar.classList.remove('bg-success', 'bg-danger');
+                    statusIcon.className = 'status-icon';
+                } else if (data.status === '下载中') {
+                    const percent = data.progress >= 0 ? data.progress : 0;
+                    progressBar.style.width = percent + '%';
+                    progressBar.textContent = percent + '%';
+                    progressBar.classList.remove('bg-success', 'bg-danger');
+                    statusIcon.className = 'status-icon'; // No icon during progress
+                    // Display downloaded bytes if available
+                    if(data.downloaded !== undefined && data.total !== undefined && data.total !== null) {
+                         progressBar.textContent = `${formatBytes(data.downloaded)} / ${formatBytes(data.total)} (${percent}%)`;
+                    } else if (data.downloaded !== undefined) {
+                         progressBar.textContent = `${formatBytes(data.downloaded)} (${percent}%)`;
+                    }
+
+                } else if (data.status === '完成') {
+                    progressBar.style.width = '100%';
+                    progressBar.classList.add('bg-success');
+                    progressBar.textContent = '完成';
+                    statusIcon.className = 'status-icon status-success bi bi-check-circle-fill';
+                    statusText.textContent = `${data.url} -> ${data.new_filename} (完成)`;
+                     // Optional: addFlashMessage(`URL ${data.url} 下载为 ${data.new_filename} 成功。`, 'success');
+                } else if (data.status === '错误') {
+                    progressBar.style.width = '100%';
+                    progressBar.classList.add('bg-danger');
+                    progressBar.textContent = '错误';
+                    statusIcon.className = 'status-icon status-error bi bi-x-circle-fill';
+                    addFlashMessage(`处理 URL ${data.url} 失败: ${data.message}`, 'danger');
+                }
+            });
+
+            evtSource.addEventListener('end', function(e) {
+                console.log("SSE Stream End:", e);
+                addFlashMessage('所有 URL 处理完毕。', 'info');
+                evtSource.close();
+                // Clear textarea after completion?
+                 urlListTextArea.value = ''; 
+            });
+
+            evtSource.onerror = function(e) {
+                console.error("EventSource failed:", e);
+                addFlashMessage('连接服务器时出错，请重试。', 'danger');
+                evtSource.close();
+            };
+         });
+    }
+
+    // --- Helper Functions ---
+    function createProgressElement(id, filename) {
+        const div = document.createElement('div');
+        div.id = id;
+        div.className = 'progress-container d-flex align-items-center mb-2';
+        div.innerHTML = `
+            <div class="file-name flex-grow-1 me-2 text-truncate" title="${filename}">${filename}</div>
+            <div class="progress flex-grow-1" style="height: 20px;">
+                <div class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+            </div>
+            <span class="status-icon ms-2"></span>
+        `;
+        return div;
+    }
+
+    function formatBytes(bytes, decimals = 2) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const dm = decimals < 0 ? 0 : decimals;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    }
+
+     function addFlashMessage(message, category) {
+        const container = document.getElementById('flash-message-container');
+        if (!container) {
+            console.error("Flash message container not found!");
+            return;
+        }
+
+        const alertDiv = document.createElement('div');
+        alertDiv.className = `alert alert-${category} alert-dismissible fade show`;
+        alertDiv.setAttribute('role', 'alert');
+        alertDiv.innerHTML = `
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        `;
+        container.appendChild(alertDiv);
+
+        // Auto-dismiss after 5 seconds
+        setTimeout(() => {
+            const alertInstance = bootstrap.Alert.getOrCreateInstance(alertDiv);
+            if (alertInstance) {
+                alertInstance.close();
+            } else {
+                alertDiv.remove(); // Fallback
+            }
+        }, 5000);
+    }
+
     // Initial update for select all state if page loads in batch mode (unlikely but safe)
     if (document.body.classList.contains('batch-mode')) {
         updateSelectAllState();

@@ -68,22 +68,14 @@
         <!-- Card 2: Base URL & Categories -->
         <div class="card center-card shadow-sm">
             <div class="card-body">
-                <h5 class="card-title mb-3">访问路径</h5>
-                <p class="card-text">
-                    <strong>基础 URL:</strong> <code class="user-select-all">{{ base_url }}</code>
-                </p>
-                <p class="card-text">
-                    <strong>表情包路径:</strong>
-                    {% if categories %}
-                        {% for category in categories %}
-                            <a href="{{ url_for('serve_random_emoticon', category_name=category) }}" class="btn btn-sm btn-outline-secondary category-link" target="_blank">
-                                /{{ category }}
-                            </a>
-                        {% endfor %}
-                    {% else %}
-                        <span class="text-muted">暂无分类。请登录后在管理页面创建。</span>
-                    {% endif %}
-                </p>
+                <h5 class="card-title mb-3">访问路径示例</h5>
+                <pre><code class="language-plaintext user-select-all" style="white-space: pre-wrap; word-break: break-all;">
+基础URL: {{ base_url.rstrip('/') }}
+{% if categories %}{% for category in categories %}
+{{ category }}: /{{ category }}
+{% endfor %}{% else %}
+(暂无分类，请登录后在管理页面创建)
+{% endif %}</code></pre>
             </div>
         </div>
 
