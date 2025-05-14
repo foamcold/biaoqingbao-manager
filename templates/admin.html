@@ -148,6 +148,7 @@
 <body>
 <div class="container mt-5">
     <div class="d-flex justify-content-between align-items-center mb-3">
+        <a href="{{ url_for('index') }}" class="btn btn-primary btn-lg">主页</a>
         <h1>管理员后台</h1>
         <a href="{{ url_for('logout') }}" class="btn btn-secondary btn-lg">登出</a> <!-- Added btn-lg, removed wrongly placed toggle btn -->
     </div>
@@ -292,7 +293,8 @@
     <!-- Upload Mode Toggle Buttons -->
     <div class="nav nav-pills mb-3" id="upload-tab" role="tablist">
         <button class="nav-link active" id="pills-local-tab" data-bs-toggle="pill" data-bs-target="#pills-local" type="button" role="tab" aria-controls="pills-local" aria-selected="true">上传本地文件</button>
-        <button class="nav-link" id="pills-url-tab" data-bs-toggle="pill" data-bs-target="#pills-url" type="button" role="tab" aria-controls="pills-url" aria-selected="false">上传 URL</button>
+        <button class="nav-link" id="pills-url-tab" data-bs-toggle="pill" data-bs-target="#pills-url" type="button" role="tab" aria-controls="pills-url" aria-selected="false">下载 URL 图片</button>
+        <button class="nav-link" id="pills-external-link-tab" data-bs-toggle="pill" data-bs-target="#pills-external-link" type="button" role="tab" aria-controls="pills-external-link" aria-selected="false">添加外链</button>
     </div>
 
     {% if categories %}
@@ -336,6 +338,27 @@
             </div>
             <div id="url-upload-list" class="mt-2"></div>
             <button type="submit" class="btn btn-success">批量上传 URL</button>
+        </form>
+        </div>
+
+        <!-- External Link Upload Pane -->
+        <div class="tab-pane fade" id="pills-external-link" role="tabpanel" aria-labelledby="pills-external-link-tab">
+        <form id="externalLinkUploadForm" class="mb-3 border p-3 rounded">
+             <div class="mb-3">
+                <label for="categorySelectExternalLink" class="form-label">选择分类</label>
+                <select name="category" id="categorySelectExternalLink" class="form-select" required>
+                    <option value="" selected disabled>-- 请选择 --</option>
+                    {% for category in categories %}
+                        <option value="{{ category }}">{{ category }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="mb-3">
+                <label for="externalLinkUrlList" class="form-label">外部链接 URL (每行一个)</label>
+                <textarea name="urls" class="form-control" id="externalLinkUrlList" rows="5" placeholder="https://example.com/image.gif\nhttps://another.com/pic.jpg" required></textarea>
+            </div>
+            <div id="external-link-upload-list" class="mt-2"></div>
+            <button type="submit" class="btn btn-info">批量添加外链</button>
         </form>
         </div>
     </div>
@@ -781,6 +804,94 @@ document.addEventListener('DOMContentLoaded', (event) => {
          });
     }
 
+    // --- External Link Upload AJAX Handling ---
+    const externalLinkUploadForm = document.getElementById('externalLinkUploadForm');
+    const categorySelectExternalLink = document.getElementById('categorySelectExternalLink');
+    const externalLinkUrlList = document.getElementById('externalLinkUrlList');
+    const externalLinkUploadDisplayList = document.getElementById('external-link-upload-list');
+
+    if (externalLinkUploadForm && categorySelectExternalLink && externalLinkUrlList && externalLinkUploadDisplayList) {
+        externalLinkUploadForm.addEventListener('submit', function(event) {
+            event.preventDefault();
+            const category = categorySelectExternalLink.value;
+            const urls = externalLinkUrlList.value.trim();
+
+            if (!category) {
+                addFlashMessage('请选择一个分类。', 'warning');
+                return;
+            }
+            if (!urls) {
+                addFlashMessage('请输入至少一个外部链接 URL。', 'warning');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('urls', urls);
+            // CSRF token might be needed if you implement CSRF protection globally
+
+            const uploadUrl = `/admin/category/${encodeURIComponent(category)}/add_external_links`;
+            
+            // Clear previous messages in this specific list
+            externalLinkUploadDisplayList.innerHTML = ''; 
+
+            // Show a general "processing" message
+            const processingMsgId = `ext-link-proc-${Date.now()}`;
+            let tempProgressElem = createProgressElement(processingMsgId, "正在处理所有链接...");
+            tempProgressElem.querySelector('.progress-bar').style.width = '100%';
+            tempProgressElem.querySelector('.progress-bar').classList.add('progress-bar-striped', 'progress-bar-animated', 'bg-info');
+            tempProgressElem.querySelector('.progress-bar').textContent = '处理中...';
+            externalLinkUploadDisplayList.appendChild(tempProgressElem);
+
+
+            fetch(uploadUrl, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Remove "processing" message
+                const oldMsg = document.getElementById(processingMsgId);
+                if(oldMsg) oldMsg.remove();
+
+                addFlashMessage(data.message, data.status === 'success' || data.status === 'partial_success' ? 'success' : (data.status === 'warning' ? 'warning' : 'danger'));
+                
+                if (data.details && Array.isArray(data.details)) {
+                    data.details.forEach(detail => {
+                        const detailId = `ext-link-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+                        const progressElement = createProgressElement(detailId, detail.url); // Use detail.url as filename for display
+                        const progressBar = progressElement.querySelector('.progress-bar');
+                        const statusIcon = progressElement.querySelector('.status-icon');
+                        
+                        progressBar.textContent = detail.message; // Show specific message from backend
+                        if (detail.status === 'success') {
+                            progressBar.classList.add('bg-success');
+                            statusIcon.className = 'status-icon status-success bi bi-check-circle-fill';
+                        } else if (detail.status === 'skipped') {
+                            progressBar.classList.add('bg-secondary'); // Use a neutral color for skipped
+                             statusIcon.className = 'status-icon text-muted bi bi-info-circle-fill'; 
+                        } else { // error
+                            progressBar.classList.add('bg-danger');
+                            statusIcon.className = 'status-icon status-error bi bi-x-circle-fill';
+                        }
+                        progressBar.style.width = '100%'; // Progress is per-URL, so it's either done or not
+                        externalLinkUploadDisplayList.appendChild(progressElement);
+                    });
+                }
+                // Clear textarea only if the overall operation was not a complete failure (e.g. category not found)
+                if (data.status === 'success' || data.status === 'partial_success' || data.status === 'warning') { 
+                     externalLinkUrlList.value = ''; 
+                }
+            })
+            .catch(error => {
+                // Remove "processing" message
+                const oldMsg = document.getElementById(processingMsgId);
+                if(oldMsg) oldMsg.remove();
+                console.error('Error adding external links:', error);
+                addFlashMessage('添加外部链接时发生网络错误。', 'danger');
+            });
+        });
+    }
+
     // --- Helper Functions ---
     function createProgressElement(id, filename) {
         const div = document.createElement('div');
@@ -869,4 +980,4 @@ document.addEventListener('DOMContentLoaded', (event) => {
 </div>
 
 </body>
-</html> 
+</html>

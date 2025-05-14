@@ -11,6 +11,7 @@ from urllib.parse import urlparse, urlunparse
 import mimetypes
 import math
 from dotenv import load_dotenv
+import uuid # For unique ID generation
 
 load_dotenv()
 
@@ -24,6 +25,64 @@ ADMIN_ALLOWED_PER_PAGE = [10, 20, 30, 40, 50]
 
 if not os.path.exists(app.config['EMOTICONS_FOLDER']):
     os.makedirs(app.config['EMOTICONS_FOLDER'])
+
+# --- Helper Functions for External Links ---
+def generate_unique_id():
+    """Generates a unique ID string."""
+    return str(uuid.uuid4())
+
+def get_external_links_path(category_name):
+    """Gets the full path to the external_links.json file for a category."""
+    # The category_name received here should already be validated by the route
+    # For path construction, we use the original category_name as it's used for directory names
+    category_path = os.path.join(app.config['EMOTICONS_FOLDER'], category_name)
+    return os.path.join(category_path, 'external_links.json')
+
+def load_external_links(category_name):
+    """Loads external links for a given category from its JSON file."""
+    links_file_path = get_external_links_path(category_name)
+
+    if not os.path.exists(links_file_path):
+        return []
+    try:
+        with open(links_file_path, 'r', encoding='utf-8') as f:
+            links = json.load(f)
+        # Ensure all links have 'added_at' and 'type' for consistency
+        for link in links:
+            if 'added_at' not in link:
+                # Fallback for potentially old data, though new data will always have it
+                link['added_at'] = datetime.datetime.min.isoformat() + "Z"
+            if 'type' not in link:
+                link['type'] = 'external' # Assume it's external if type is missing
+        return links
+    except (json.JSONDecodeError, IOError) as e:
+        app.logger.error(f"Error loading external links for {category_name}: {e}")
+        return []
+
+def save_external_links(category_name, links_data):
+    """Saves external links for a given category to its JSON file."""
+    links_file_path = get_external_links_path(category_name)
+
+    category_dir = os.path.dirname(links_file_path)
+    # Category directory should exist if the category itself exists.
+    if not os.path.exists(category_dir):
+        try:
+            # This case should ideally not be hit if category management is correct
+            os.makedirs(category_dir)
+            app.logger.info(f"Created missing directory for external links: {category_dir}")
+        except OSError as e:
+            app.logger.error(f"Error creating directory {category_dir} for external links: {e}")
+            return False
+
+    try:
+        with open(links_file_path, 'w', encoding='utf-8') as f:
+            json.dump(links_data, f, ensure_ascii=False, indent=2)
+        return True
+    except IOError as e:
+        app.logger.error(f"Error saving external links for {category_name}: {e}")
+        return False
+
+# --- End Helper Functions for External Links ---
 
 def login_required(view):
     @functools.wraps(view)
@@ -191,16 +250,13 @@ def delete_category(category_name):
 @app.route('/admin/category/<path:category_name>')
 @login_required
 def view_category(category_name):
-    # Validate the raw category name directly
     if not is_valid_category_name(category_name):
         flash('无效的分类名称。', 'danger')
         return redirect(url_for('admin'))
 
-    # Use the validated category name directly for the path
     category_path = os.path.join(app.config['EMOTICONS_FOLDER'], category_name)
-
     if not os.path.isdir(category_path):
-        flash(f'分类 "{category_name}" 不存在。', 'warning') # Use original name
+        flash(f'分类 "{category_name}" 不存在。', 'warning')
         return redirect(url_for('admin'))
 
     try:
@@ -216,44 +272,72 @@ def view_category(category_name):
     if per_page not in ALLOWED_PER_PAGE:
         per_page = 100
 
-    all_image_files = []
-    try:
-        all_image_files = sorted([f for f in os.listdir(category_path)
-                                 if os.path.isfile(os.path.join(category_path, f)) and allowed_file(f)])
-    except OSError as e:
-        flash(f'无法读取分类 "{category_name}" 的内容: {e}', 'danger')
+    all_items = []
 
-    total_images = len(all_image_files)
-    total_pages = math.ceil(total_images / per_page) if per_page > 0 else 1
+    # 1. Load local images
+    try:
+        local_image_files = [f for f in os.listdir(category_path)
+                             if os.path.isfile(os.path.join(category_path, f)) and allowed_file(f)]
+        for filename in local_image_files:
+            file_path = os.path.join(category_path, filename)
+            try:
+                modified_time = os.path.getmtime(file_path)
+                added_at_iso = datetime.datetime.fromtimestamp(modified_time, datetime.timezone.utc).isoformat()
+            except OSError:
+                # Fallback if cannot get modification time
+                added_at_iso = datetime.datetime.min.isoformat() + "Z"
+            
+            all_items.append({
+                'id': filename, # Use filename as ID for local files
+                'name': filename,
+                'type': 'local',
+                'view_url': url_for('serve_emoticon_file', category_name=category_name, filename=filename),
+                'download_url': url_for('download_emoticon', category_name=category_name, filename=filename),
+                'added_at': added_at_iso
+            })
+    except OSError as e:
+        flash(f'无法读取分类 "{category_name}" 的本地图片内容: {e}', 'danger')
+
+    # 2. Load external links
+    external_links = load_external_links(category_name)
+    for link in external_links:
+        all_items.append({
+            'id': link['id'], # Use the ID from external_links.json
+            'name': link['url'], # Display URL as name
+            'type': 'external',
+            'view_url': link['url'], # For direct linking
+            'added_at': link.get('added_at', datetime.datetime.min.isoformat() + "Z") # Ensure added_at exists
+            # 'download_url' is not applicable for external links in the same way
+        })
+
+    # 3. Sort all items by 'added_at' in descending order (newest first)
+    all_items.sort(key=lambda x: x['added_at'], reverse=True)
+
+    # 4. Pagination
+    total_items_count = len(all_items)
+    total_pages = math.ceil(total_items_count / per_page) if per_page > 0 else 1
     if page > total_pages and total_pages > 0:
         page = total_pages
 
     start_index = (page - 1) * per_page
     end_index = start_index + per_page
-    image_files_on_page = all_image_files[start_index:end_index]
+    items_on_page = all_items[start_index:end_index]
 
-    images_list_for_template = []
-    for img_filename in image_files_on_page:
-        images_list_for_template.append({
-            'filename': img_filename,
-            'view_url': url_for('serve_emoticon_file', category_name=category_name, filename=img_filename),
-            'download_url': url_for('download_emoticon', category_name=category_name, filename=img_filename)
-        })
-
-    all_categories = []
+    # 5. Get all category names for dropdown
+    all_categories_list = []
     emoticons_dir = app.config['EMOTICONS_FOLDER']
     try:
-        all_categories = sorted([d for d in os.listdir(emoticons_dir) if os.path.isdir(os.path.join(emoticons_dir, d))])
+        all_categories_list = sorted([d for d in os.listdir(emoticons_dir) if os.path.isdir(os.path.join(emoticons_dir, d))])
     except OSError as e:
         app.logger.warning(f'Could not list directories in {emoticons_dir}: {e}')
 
     return render_template('category_view.html',
                            category_name=category_name,
-                           images=images_list_for_template,
-                           all_categories=all_categories,
+                           items=items_on_page, # Changed from 'images' to 'items'
+                           all_categories=all_categories_list,
                            page=page,
                            per_page=per_page,
-                           total_images=total_images,
+                           total_items=total_items_count, # Changed from 'total_images'
                            total_pages=total_pages,
                            allowed_per_page_values=ALLOWED_PER_PAGE)
 
@@ -421,8 +505,91 @@ def upload_url_stream():
         
         app.logger.info("[SSE] 所有 URL 处理完毕")
         yield f"event: end\ndata: {json.dumps({'message': '所有 URL 处理完毕'})}\n\n"
+    # End of generate() function
 
     return Response(generate(), mimetype='text/event-stream')
+@app.route('/admin/category/<path:category_name>/add_external_links', methods=['POST'])
+@login_required
+def add_external_links(category_name):
+    # Validate the raw category name directly
+    if not is_valid_category_name(category_name):
+        return jsonify(status='error', message='无效的分类名称'), 400
+
+    # Use the validated name for path operations
+    category_path = os.path.join(app.config['EMOTICONS_FOLDER'], category_name)
+    if not os.path.isdir(category_path):
+        # Use original name in error message
+        return jsonify(status='error', message=f'分类 "{category_name}" 不存在'), 400
+
+    urls_text = request.form.get('urls', '')
+    if not urls_text.strip():
+        return jsonify(status='error', message='未提供任何 URL'), 400
+
+    image_urls = [url.strip() for url in urls_text.splitlines() if url.strip()]
+    if not image_urls:
+        # This case might be redundant if urls_text.strip() is empty, but good for clarity
+        return jsonify(status='error', message='未提供任何有效的 URL'), 400
+
+    external_links = load_external_links(category_name)
+    new_links_added_count = 0
+    processed_urls_messages = [] # To provide feedback for each URL
+
+    for url_to_add in image_urls:
+        try:
+            parsed_url = urlparse(url_to_add)
+            if not all([parsed_url.scheme, parsed_url.netloc]) or parsed_url.scheme not in ('http', 'https'):
+                app.logger.warning(f"无效的 URL 格式或协议: {url_to_add} (分类: {category_name})")
+                processed_urls_messages.append({'url': url_to_add, 'status': 'error', 'message': '无效的URL格式或协议'})
+                continue 
+        except ValueError: 
+            app.logger.warning(f"解析URL时出错: {url_to_add} (分类: {category_name})")
+            processed_urls_messages.append({'url': url_to_add, 'status': 'error', 'message': '解析URL时出错'})
+            continue
+
+        is_duplicate = False
+        for existing_link in external_links:
+            if existing_link.get('url') == url_to_add:
+                is_duplicate = True
+                app.logger.info(f"跳过重复的 URL: {url_to_add} (分类: {category_name})")
+                processed_urls_messages.append({'url': url_to_add, 'status': 'skipped', 'message': '重复的URL'})
+                break
+        
+        if is_duplicate:
+            continue
+
+        new_link = {
+            'id': generate_unique_id(),
+            'url': url_to_add,
+            'type': 'external',
+            'added_at': datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+        external_links.append(new_link)
+        new_links_added_count += 1
+        processed_urls_messages.append({'url': url_to_add, 'status': 'success', 'message': '添加成功'})
+    
+    if new_links_added_count > 0:
+        if not save_external_links(category_name, external_links):
+            return jsonify(status='error', message='保存外部链接时出错', details=processed_urls_messages), 500
+        
+        # Check if all processed URLs resulted in a successful addition
+        all_successful_adds = True
+        for detail in processed_urls_messages:
+            if detail['url'] in image_urls and detail['status'] != 'success':
+                 # This check is a bit complex because processed_urls_messages also contains skipped/error messages
+                 # A simpler check might be if new_links_added_count == len(image_urls) (assuming no invalid format errors before duplicate check)
+                 pass # For now, we rely on new_links_added_count vs image_urls length
+
+        if new_links_added_count == len(image_urls): # Ideal case: all provided URLs were new and valid
+             return jsonify(status='success', message=f'成功添加 {new_links_added_count} 个外部链接到分类 "{category_name}"。', details=processed_urls_messages)
+        else: # Some were successful, some skipped/errored
+             return jsonify(status='partial_success', message=f'操作完成。成功添加 {new_links_added_count} 个链接。部分URL可能被跳过或出错。', details=processed_urls_messages)
+
+    elif not image_urls: # Should have been caught earlier
+        return jsonify(status='error', message='未提供任何有效的 URL。', details=processed_urls_messages), 400
+    else: # All provided URLs were invalid or duplicates
+        return jsonify(status='warning', message='所有提供的 URL 均无效或已存在，未添加任何新链接。', details=processed_urls_messages), 400
+    # Removed erroneous yield and Response(generate()) from here, as this is not an SSE endpoint.
+    # The jsonify calls above are the correct way to return for this POST request.
 
 @app.route('/emoticons/<path:category_name>/<path:filename>')
 @login_required
@@ -451,41 +618,96 @@ def serve_emoticon_file(category_name, filename):
 
 @app.route('/<path:category_name>')
 def serve_random_emoticon(category_name):
-    # Validate the raw category name directly
     if not is_valid_category_name(category_name):
         abort(404)
 
-    # Use the validated category name directly for the path
     category_path = os.path.join(app.config['EMOTICONS_FOLDER'], category_name)
-
     if not os.path.isdir(category_path):
         abort(404)
 
+    all_available_items = []
+
+    # 1. Load local images
     try:
-        image_files = [f for f in os.listdir(category_path)
-                       if os.path.isfile(os.path.join(category_path, f)) and allowed_file(f)]
+        local_image_files = [f for f in os.listdir(category_path)
+                             if os.path.isfile(os.path.join(category_path, f)) and allowed_file(f)]
+        for filename in local_image_files:
+            all_available_items.append({
+                'id': filename, # Use filename as ID
+                'type': 'local',
+                'path': category_path, # Store path for send_from_directory
+                'filename': filename
+            })
     except OSError:
-        abort(500)
+        # If error reading local files, we might still serve external links
+        app.logger.error(f"Error reading local files for category {category_name} in serve_random_emoticon")
 
-    if not image_files:
-        abort(404)
 
-    last_shown_images = session.get('last_shown', {})
-    last_shown_in_category = last_shown_images.get(category_name)
+    # 2. Load external links
+    external_links = load_external_links(category_name)
+    for link in external_links:
+        all_available_items.append({
+            'id': link['id'], # Use the ID from external_links.json
+            'type': 'external',
+            'url': link['url']
+        })
 
-    eligible_images = image_files
-    if last_shown_in_category and len(image_files) > 1:
-        possible_images = [img for img in image_files if img != last_shown_in_category]
-        if possible_images:
-            eligible_images = possible_images
+    if not all_available_items:
+        abort(404) # No local images and no external links
 
-    chosen_image = random.choice(eligible_images)
+    last_shown_map = session.get('last_shown_v2', {}) # Use a new session key to avoid conflict with old format
+    last_shown_item_info = last_shown_map.get(category_name) # This will be a dict {'id': ..., 'type': ...} or None
 
-    last_shown_images[category_name] = chosen_image
-    session['last_shown'] = last_shown_images
+    eligible_items = all_available_items
+    if last_shown_item_info and len(all_available_items) > 1:
+        # Filter out the last shown item based on its id and type
+        possible_items = [
+            item for item in all_available_items
+            if not (item['id'] == last_shown_item_info['id'] and item['type'] == last_shown_item_info['type'])
+        ]
+        if possible_items:
+            eligible_items = possible_items
+    
+    if not eligible_items: # Should only happen if all_available_items had only 1 item, and it was last_shown
+        eligible_items = all_available_items # Fallback to serving any item if filtering left none
+
+    chosen_item = random.choice(eligible_items)
+
+    # Update session with the new last shown item's id and type
+    last_shown_map[category_name] = {'id': chosen_item['id'], 'type': chosen_item['type']}
+    session['last_shown_v2'] = last_shown_map
     session.modified = True
 
-    return send_from_directory(category_path, chosen_image)
+    if chosen_item['type'] == 'local':
+        return send_from_directory(chosen_item['path'], chosen_item['filename'])
+    elif chosen_item['type'] == 'external':
+        # Before redirecting, ensure the URL is somewhat safe (already validated on input, but good practice)
+        parsed_url = urlparse(chosen_item['url'])
+        if parsed_url.scheme in ['http', 'https'] and parsed_url.netloc:
+             return redirect(chosen_item['url'])
+        else:
+            app.logger.warning(f"Attempted to redirect to an invalid external URL: {chosen_item['url']}")
+            # Fallback: if the chosen external URL is invalid, try to serve another random item
+            # This is a simple fallback; a more robust solution might re-select or error differently.
+            if len(all_available_items) > 1:
+                # Try to pick another one, excluding the problematic one
+                remaining_items = [item for item in all_available_items if item['id'] != chosen_item['id'] or item['type'] != chosen_item['type']]
+                if remaining_items:
+                    fallback_item = random.choice(remaining_items)
+                    # Update session for the fallback item
+                    last_shown_map[category_name] = {'id': fallback_item['id'], 'type': fallback_item['type']}
+                    session['last_shown_v2'] = last_shown_map
+                    session.modified = True
+                    if fallback_item['type'] == 'local':
+                        return send_from_directory(fallback_item['path'], fallback_item['filename'])
+                    elif fallback_item['type'] == 'external' and urlparse(fallback_item['url']).scheme in ['http', 'https']:
+                        return redirect(fallback_item['url'])
+            # If all else fails or only one item which is bad
+            abort(500) # Or a more specific error
+    else:
+        # Should not happen if types are only 'local' or 'external'
+        app.logger.error(f"Unknown item type encountered: {chosen_item.get('type')}")
+        abort(500)
 
 @app.route('/admin/download/<path:category_name>/<path:filename>')
 @login_required
@@ -651,6 +873,76 @@ def batch_delete_emoticons(category_name):
 
     return redirect(url_for('view_category', category_name=category_name))
 
+@app.route('/admin/category/<path:category_name>/external_link/<link_id>/edit', methods=['POST'])
+@login_required
+def edit_external_link(category_name, link_id):
+    if not is_valid_category_name(category_name):
+        flash('无效的分类名称。', 'danger')
+        return redirect(url_for('admin'))
+
+    new_url = request.form.get('new_url', '').strip()
+    if not new_url:
+        flash('新的 URL 不能为空。', 'warning')
+        return redirect(url_for('view_category', category_name=category_name))
+
+    try:
+        parsed_new_url = urlparse(new_url)
+        if not all([parsed_new_url.scheme, parsed_new_url.netloc]) or parsed_new_url.scheme not in ('http', 'https'):
+            flash('无效的新 URL 格式或协议。', 'warning')
+            return redirect(url_for('view_category', category_name=category_name))
+    except ValueError:
+        flash('解析新 URL 时出错。', 'warning')
+        return redirect(url_for('view_category', category_name=category_name))
+
+    external_links = load_external_links(category_name)
+    link_found = False
+    for link_idx, link in enumerate(external_links):
+        if link.get('id') == link_id:
+            # Check if this new URL already exists (excluding the current link being edited)
+            for other_idx, other_link in enumerate(external_links):
+                if other_idx != link_idx and other_link.get('url') == new_url:
+                    flash(f'新的 URL "{new_url}" 已在该分类中存在。', 'warning')
+                    return redirect(url_for('view_category', category_name=category_name))
+            
+            link['url'] = new_url
+            # Optionally update 'added_at' to reflect modification time, or keep original add time
+            # link['added_at'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            link_found = True
+            break
+    
+    if link_found:
+        if save_external_links(category_name, external_links):
+            flash('外部链接已成功更新。', 'success')
+        else:
+            flash('保存外部链接时出错。', 'danger')
+    else:
+        flash('未找到要编辑的外部链接。', 'warning')
+
+    return redirect(url_for('view_category', category_name=category_name))
+
+@app.route('/admin/category/<path:category_name>/external_link/<link_id>/delete', methods=['POST'])
+@login_required
+def delete_external_link(category_name, link_id):
+    if not is_valid_category_name(category_name):
+        flash('无效的分类名称。', 'danger')
+        return redirect(url_for('admin'))
+
+    external_links = load_external_links(category_name)
+    original_length = len(external_links)
+    
+    # Filter out the link to be deleted
+    external_links_updated = [link for link in external_links if link.get('id') != link_id]
+
+    if len(external_links_updated) < original_length:
+        if save_external_links(category_name, external_links_updated):
+            flash('外部链接已成功删除。', 'success')
+        else:
+            flash('保存外部链接时出错（删除操作）。', 'danger')
+    else:
+        flash('未找到要删除的外部链接，或链接已被删除。', 'warning')
+        
+    return redirect(url_for('view_category', category_name=category_name))
+
 @app.route('/admin/batch_delete_categories', methods=['POST'])
 @login_required
 def batch_delete_categories():
@@ -696,6 +988,84 @@ def batch_delete_categories():
 
     # Redirect back to admin, potentially preserving page/per_page if desired (omitted for simplicity now)
     return redirect(url_for('admin'))
+@app.route('/admin/batch_delete_items/<path:category_name>', methods=['POST'])
+@login_required
+def batch_delete_items(category_name):
+    if not is_valid_category_name(category_name):
+        return jsonify(status='error', message='无效的分类名称。'), 400
+
+    category_path = os.path.join(app.config['EMOTICONS_FOLDER'], category_name)
+    if not os.path.isdir(category_path):
+        return jsonify(status='error', message=f'分类 "{category_name}" 不存在。'), 404
+
+    try:
+        data = request.get_json()
+        if not data or 'items_to_delete' not in data or not isinstance(data['items_to_delete'], list):
+            return jsonify(status='error', message='请求体无效，缺少 "items_to_delete" 列表。'), 400
+        items_to_delete = data['items_to_delete']
+    except Exception as e:
+        app.logger.error(f"Error parsing JSON for batch_delete_items: {e}")
+        return jsonify(status='error', message='请求体JSON解析错误。'), 400
+
+    results = []
+    external_links_changed = False
+    current_external_links = None # Load only once if needed
+
+    for item in items_to_delete:
+        item_id = item.get('id')
+        item_type = item.get('type')
+        item_name = item.get('name', item_id) # Fallback name to id if not provided
+
+        if not item_id or not item_type:
+            results.append({'id': item_id, 'type': item_type, 'name': item_name, 'status': 'error', 'message': '项目缺少 "id" 或 "type"'})
+            continue
+
+        if item_type == 'local':
+            safe_filename = secure_filename(item_id)
+            if not safe_filename or safe_filename != item_id:
+                results.append({'id': item_id, 'type': item_type, 'name': item_name, 'status': 'error', 'message': '本地文件名无效。'})
+                continue
+            
+            file_path = os.path.join(category_path, safe_filename)
+            if not os.path.isfile(file_path):
+                results.append({'id': item_id, 'type': item_type, 'name': item_name, 'status': 'error', 'message': '本地文件未找到。'})
+            else:
+                try:
+                    os.remove(file_path)
+                    results.append({'id': item_id, 'type': item_type, 'name': item_name, 'status': 'success', 'message': '本地文件已删除。'})
+                except OSError as e:
+                    app.logger.error(f"Error deleting local file {file_path}: {e}")
+                    results.append({'id': item_id, 'type': item_type, 'name': item_name, 'status': 'error', 'message': f'删除本地文件时出错: {e}'})
+        
+        elif item_type == 'external':
+            if current_external_links is None: # Load once
+                current_external_links = load_external_links(category_name)
+            
+            original_link_count = len(current_external_links)
+            current_external_links = [link for link in current_external_links if link.get('id') != item_id]
+            
+            if len(current_external_links) < original_link_count:
+                external_links_changed = True
+                results.append({'id': item_id, 'type': item_type, 'name': item_name, 'status': 'success', 'message': '外部链接已标记为删除。'})
+            else:
+                results.append({'id': item_id, 'type': item_type, 'name': item_name, 'status': 'error', 'message': '外部链接未找到或已被删除。'})
+        
+        else:
+            results.append({'id': item_id, 'type': item_type, 'name': item_name, 'status': 'error', 'message': f'未知的项目类型: {item_type}'})
+
+    if external_links_changed:
+        if not save_external_links(category_name, current_external_links):
+            # If saving fails, update status for all 'external' items that were 'success'
+            for res in results:
+                if res['type'] == 'external' and res['status'] == 'success':
+                    res['status'] = 'error'
+                    res['message'] = '外部链接已标记为删除，但保存更改失败。'
+            # Optionally, add a general error message to the response
+            # return jsonify(status='error', message='保存外部链接更改时出错。', results=results), 500
+            app.logger.error(f"Failed to save external_links.json for category {category_name} after batch delete.")
+            # The individual statuses will reflect the save failure for external links.
+
+    return jsonify(results=results)
 
 if __name__ == '__main__':
     @app.context_processor

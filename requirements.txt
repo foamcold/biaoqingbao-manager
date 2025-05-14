@@ -1,4 +1,5 @@
 Flask>=2.0
 requests
 python-dotenv
-# Add gunicorn or waitress if you choose one 
+gunicorn
+# Add gunicorn or waitress if you choose one

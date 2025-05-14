@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      # 映射宿主机的 ./emoticons 目录到容器内的 /app/emoticons 目录
+      # 请确保宿主机上存在 ./emoticons 目录，或者根据您的实际路径调整
+      # 如果您的 .env 文件中 EMOTICONS_FOLDER 指向其他相对路径，
+      # 确保这里的源路径 (./emoticons) 与之对应，
+      # 并且容器内的目标路径 (/app/emoticons) 与应用期望的一致。
+      # 假设 app.py 中 EMOTICONS_FOLDER 默认为 'emoticons'，
+      # 并且 Dockerfile 中 WORKDIR 是 /app，那么容器内路径是 /app/emoticons。
+      - ./emoticons:/app/emoticons 
+    env_file:
+      - .env
+    # 可选：如果需要在开发时代码更改立即生效，可以取消注释下面的行
+    # 但请注意，这通常不用于生产构建，因为代码应已构建到镜像中。
+    # volumes:
+    #   - .:/app  # 映射整个项目目录 (会覆盖镜像中的代码)
+    #   - ./emoticons:/app/emoticons # 确保这个映射仍然存在且正确
+    environment:
+      # 您可以在这里覆盖 .env 文件中的变量，或者添加额外的环境变量
+      # 例如，确保 Flask 在容器内以生产模式运行（如果 .env 中未设置）
+      - FLASK_ENV=${FLASK_ENV:-production} 
+      - FLASK_DEBUG=${FLASK_DEBUG:-0}
+      # Gunicorn 需要知道 Flask 应用对象的位置
+      # 如果您的 app.py 中的 Flask 实例是 app，则不需要这个。
+      # - APP_MODULE=app:app

@@ -278,7 +278,7 @@
 
         <!-- Right side Action Buttons -->
         <div class="action-buttons-container">
-            <a href="{{ url_for('admin') }}" class="btn btn-secondary btn-lg me-2">返回管理首页</a> <!-- Larger button, Logout removed -->
+            <a href="{{ url_for('admin') }}" class="btn btn-secondary btn-lg me-2">返回</a> <!-- Larger button, Logout removed -->
         </div>
     </div>
 
@@ -288,12 +288,12 @@
     <div class="d-flex justify-content-between align-items-center mb-3"> <!-- Left/Right alignment -->
         <!-- Left: Pagination Info -->
          <div class="pagination-info">
-            {% if total_images > 0 %}
+            {% if total_items > 0 %}
                 {% set start_item = (page - 1) * per_page + 1 %}
-                {% set end_item = page * per_page if page * per_page < total_images else total_images %}
-                显示第 {{ start_item }} - {{ end_item }} 项，共 {{ total_images }} 项
-            {% elif images %}
-                 显示 {{ images|length }} 项
+                {% set end_item = page * per_page if page * per_page < total_items else total_items %}
+                显示第 {{ start_item }} - {{ end_item }} 项，共 {{ total_items }} 项
+            {% elif items %}
+                 显示 {{ items|length }} 项
             {% endif %}
         </div>
 
@@ -340,30 +340,51 @@
         {% endwith %}
     </div>
 
-    {% if images %}
+    {% if items %}
         <div class="image-wall mb-4">
-            {% for image in images %}
-                <!-- Add data-filename directly to card for easier selection -->
-                <div class="image-card" data-filename="{{ image.filename }}">
-                     <!-- Checkbox removed -->
-                    <img src="{{ image.view_url }}" 
-                         alt="{{ image.filename }}" 
-                         loading="lazy" 
-                         class="img-thumbnail preview-trigger" 
-                         data-index="{{ loop.index0 }}" 
-                         data-filename="{{ image.filename }}">
-                    <span class="filename">{{ image.filename }}</span>
-                    
-                    <!-- Actions (now hidden in batch mode via CSS) -->
-                    <div class="actions">
-                         <button type="button" class="btn btn-sm btn-outline-warning rename-btn" title="重命名" data-bs-toggle="modal" data-bs-target="#renameModal" data-category-name="{{ category_name }}" data-old-filename="{{ image.filename }}">✏️</button>
-                        <button type="button" class="btn btn-sm btn-outline-danger delete-btn" title="删除" data-category-name="{{ category_name }}" data-filename="{{ image.filename }}">🗑️</button>
-                    </div>
+            {% for item in items %}
+                <div class="image-card"
+                     data-item-id="{{ item.id }}"
+                     data-item-type="{{ item.type }}"
+                     data-item-name="{{ item.name }}" {# For display and some JS operations #}
+                     data-view-url="{{ item.view_url }}" {# For preview #}
+                     >
+                    {% if item.type == 'local' %}
+                        <img src="{{ item.view_url }}"
+                             alt="{{ item.name }}"
+                             loading="lazy"
+                             class="img-thumbnail preview-trigger" {# preview-trigger for local images only #}
+                             data-index="{{ loop.index0 }}" {# Still useful for local image array indexing #}
+                             onerror="this.style.display='none'; this.parentElement.innerHTML += '<div class=\'text-danger small\'>本地图片加载失败</div>';"
+                             >
+                        <span class="filename" title="{{ item.name }}">{{ item.name }}</span>
+                        <div class="actions">
+                            <button type="button" class="btn btn-sm btn-outline-warning rename-btn" title="重命名" data-bs-toggle="modal" data-bs-target="#renameModal" data-category-name="{{ category_name }}" data-old-filename="{{ item.name }}">✏️</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger delete-btn" title="删除" data-category-name="{{ category_name }}" data-filename="{{ item.name }}">🗑️</button>
+                        </div>
+                    {% elif item.type == 'external' %}
+                        <a href="{{ item.view_url }}" target="_blank" rel="noopener noreferrer" title="在新标签页中打开外部链接: {{ item.name }}">
+                            <img src="{{ item.view_url }}"
+                                 alt="外部链接: {{ item.name }}"
+                                 loading="lazy"
+                                 class="img-thumbnail"
+                                 onerror="this.style.display='none'; this.parentElement.innerHTML += '<div class=\'text-danger small\'>外部图片无法加载<br><a href=\'{{ item.view_url }}\' target=\'_blank\' class=\'btn btn-sm btn-link p-0\'>尝试打开原始链接</a></div>';"
+                                 style="object-fit: contain; cursor: pointer;"
+                                 >
+                        </a>
+                        <span class="filename" title="{{ item.name }}">{{ item.name | truncate(60) }}</span> {# Truncate long URLs #}
+                        <div class="actions">
+                            <button type="button" class="btn btn-sm btn-outline-info edit-external-link-btn" title="编辑外链" data-bs-toggle="modal" data-bs-target="#editExternalLinkModal" data-link-id="{{ item.id }}" data-link-url="{{ item.view_url }}">✏️</button>
+                            <form action="{{ url_for('delete_external_link', category_name=category_name, link_id=item.id) }}" method="post" class="d-inline" onsubmit="return confirm('确定要删除这个外部链接吗？\n{{ item.view_url }}');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger" title="删除外链">🗑️</button>
+                            </form>
+                        </div>
+                    {% endif %}
                 </div>
             {% endfor %}
         </div>
     {% else %}
-        <div class="alert alert-info">这个分类下还没有表情包。</div>
+        <div class="alert alert-info">这个分类下还没有任何项目。</div>
     {% endif %}
 
     <!-- Pagination Navigation -->
@@ -537,28 +558,55 @@
   </div>
 </div>
 
+<!-- Edit External Link Modal -->
+<div class="modal fade" id="editExternalLinkModal" tabindex="-1" aria-labelledby="editExternalLinkModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="editExternalLinkModalLabel">编辑外部链接</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form id="editExternalLinkForm" method="POST"> {# Action will be set by JS #}
+        <div class="modal-body">
+          <input type="hidden" id="editExternalLinkId" name="link_id">
+          <div class="mb-3">
+            <label for="editExternalLinkUrl" class="form-label">链接 URL</label>
+            <input type="url" class="form-control" id="editExternalLinkUrl" name="new_url" required>
+          </div>
+          <p class="text-muted small">当前 URL: <small id="currentExternalLinkDisplay" style="word-break: break-all;"></small></p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="submit" class="btn btn-primary">保存更改</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+
 <!-- Bootstrap Bundle JS -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 
 <!-- Embed data as JSON -->
 <script id="viewData" type="application/json">
-{{ {"category_name": category_name, "images": images} | tojson | safe }}
+{{ {"category_name": category_name, "items": items} | tojson | safe }}
 </script>
 
 <!-- Main script -->
 <script>
 // Parse embedded JSON data safely
 let categoryName = '';
-let imagesData = [];
-let currentPreviewIndex = -1;
+let itemsData = []; // Changed from imagesData
+let currentPreviewIndex = -1; // Used for local image preview navigation
 
 try {
     const viewDataElement = document.getElementById('viewData');
     if (viewDataElement && viewDataElement.textContent) {
         const embeddedData = JSON.parse(viewDataElement.textContent);
         categoryName = embeddedData.category_name;
-        imagesData = embeddedData.images; // Already contains filename, view_url, download_url
-        console.log('Successfully parsed embedded data:', categoryName, imagesData);
+        itemsData = embeddedData.items; // Changed from images
+        console.log('Successfully parsed embedded data:', categoryName, itemsData);
     } else {
         console.error('Could not find or parse viewData script tag.');
     }
@@ -605,25 +653,45 @@ const deleteFormRef = document.getElementById('deleteImageForm');
 const previewNavFeedback = document.getElementById('previewNavFeedback');
 let feedbackTimeout = null;
 
-// --- Function to Update Preview Modal Content --- 
+// --- Function to Update Preview Modal Content (Unified for all item types) ---
 function updatePreviewModal(index) {
-    if (!imagesData || index < 0 || index >= imagesData.length) {
-        console.error('Invalid index for preview:', index);
+    if (!itemsData || index < 0 || index >= itemsData.length) {
+        console.error('Invalid index for item preview:', index, itemsData);
+        imagePreviewModal.hide(); // Hide modal if index is invalid
         return;
     }
-    currentPreviewIndex = index;
-    const imageData = imagesData[index];
+    currentPreviewIndex = index; // This index is relative to the full itemsData
+    const itemData = itemsData[index];
 
-    console.log(`Updating preview to index ${index}: ${imageData.filename}`);
+    console.log(`Updating preview to item index ${index}: ${itemData.name} (Type: ${itemData.type})`);
 
-    modalImage.src = imageData.view_url;
-    modalImage.alt = imageData.filename;
-    modalFilenameSpan.textContent = imageData.filename;
-    modalFilenameSpan.title = imageData.filename;
-    modalRenameBtn.dataset.oldFilename = imageData.filename;
-    modalDeleteBtn.dataset.filename = imageData.filename;
-    previewPrevBtn.disabled = (index === 0);
-    previewNextBtn.disabled = (index === imagesData.length - 1);
+    modalImage.src = itemData.view_url;
+    modalImage.alt = itemData.name; // Use item.name (filename or URL)
+    modalFilenameSpan.textContent = itemData.name;
+    modalFilenameSpan.title = itemData.name;
+
+    // Configure modal actions based on item type
+    if (itemData.type === 'local') {
+        modalRenameBtn.style.display = 'inline-block';
+        modalRenameBtn.dataset.oldFilename = itemData.name; // Original filename for rename
+        
+        modalDeleteBtn.style.display = 'inline-block';
+        modalDeleteBtn.dataset.itemType = 'local';
+        modalDeleteBtn.dataset.itemId = itemData.id; // This is filename for local
+        modalDeleteBtn.dataset.itemName = itemData.name; // For confirmation message
+    } else if (itemData.type === 'external') {
+        modalRenameBtn.style.display = 'none'; // No rename for external links
+
+        modalDeleteBtn.style.display = 'inline-block';
+        modalDeleteBtn.dataset.itemType = 'external';
+        modalDeleteBtn.dataset.itemId = itemData.id; // This is UUID for external
+        modalDeleteBtn.dataset.itemName = itemData.name; // URL for confirmation
+    } else {
+        // Should not happen, but hide actions if unknown type
+        modalRenameBtn.style.display = 'none';
+        modalDeleteBtn.style.display = 'none';
+    }
+    // Navigation buttons are handled by their own click/keydown listeners based on currentPreviewIndex and itemsData.length
 }
 
 // --- Function to Show Navigation Feedback ---
@@ -638,40 +706,72 @@ function showNavFeedback(message) {
     }, 1500); // Show for 1.5 seconds
 }
 
-// --- Event Listeners --- 
+// --- Event Listeners ---
 
-// Thumbnail clicks
-document.querySelectorAll('.preview-trigger').forEach(img => {
-    img.addEventListener('click', function() {
-        // Only open modal if NOT in batch mode
-        if (!document.body.classList.contains('batch-mode')) {
-            const index = parseInt(this.dataset.index, 10);
-            if (!isNaN(index)) {
-                console.log(`Thumbnail clicked (non-batch): index ${index}`);
-                updatePreviewModal(index);
+// Unified Thumbnail clicks for all item types
+document.querySelectorAll('.image-card').forEach(card => {
+    card.addEventListener('click', function(event) {
+        if (document.body.classList.contains('batch-mode')) {
+            // In batch mode, card click is for selection, handled by another listener (around line 1067)
+            // We ensure this click doesn't bubble up or trigger preview if it's on the card itself.
+            // The selection logic should ideally prevent preview.
+            // If an action button inside the card was somehow visible and clicked, we'd ignore that too.
+            if (event.target.closest('.actions')) return; // Should be hidden in batch mode anyway
+            // The selection logic is primary here.
+            return;
+        }
+
+        // Not in batch mode, proceed to show preview modal
+        const itemId = this.dataset.itemId;
+        const itemType = this.dataset.itemType;
+
+        // Find the index of the clicked item in the global itemsData array
+        const itemIndex = itemsData.findIndex(item => item.id === itemId && item.type === itemType);
+
+        if (itemIndex !== -1) {
+            // If the click was on an external link's <a> tag or its child img, let the default browser action (open link) happen.
+            // But also open our modal if it's not a direct click on the <a> tag itself for opening in new tab.
+            // For external items, the image is wrapped in an <a> tag.
+            // We want to open the modal unless the user explicitly middle-clicked or ctrl-clicked the link.
+            
+            let openModal = true;
+            if (itemType === 'external') {
+                // If the click target is the <a> tag itself or its direct child (the image),
+                // and it's a simple left click (not modified), we might want to show modal.
+                // If it's a modified click (Ctrl, Shift, Meta, Middle button), browser handles new tab.
+                if (event.target.closest('a[target="_blank"]') && (event.ctrlKey || event.metaKey || event.shiftKey || event.button === 1) ) {
+                    openModal = false; // Let browser handle new tab opening
+                }
+            }
+            
+            if (openModal) {
+                event.preventDefault(); // Prevent default action if we are opening the modal (e.g. for external link's <a> tag)
+                console.log(`Item card clicked (non-batch): ID ${itemId}, Type ${itemType}, Mapped index ${itemIndex}`);
+                updatePreviewModal(itemIndex);
                 imagePreviewModal.show();
             }
         } else {
-            // Optionally log that the click was ignored due to batch mode
-            console.log('Thumbnail click ignored in batch mode.');
+            console.error(`Could not find clicked item (ID: ${itemId}, Type: ${itemType}) in itemsData for preview.`);
         }
     });
 });
 
-// Modal navigation buttons
+// Modal navigation buttons (Unified for all itemsData)
 previewPrevBtn.addEventListener('click', () => {
+    if (!itemsData.length) return;
     if (currentPreviewIndex > 0) {
         updatePreviewModal(currentPreviewIndex - 1);
     } else {
-        showNavFeedback('已经是第一张图片了'); // Show feedback
+        showNavFeedback('已经是第一张了');
     }
 });
 
 previewNextBtn.addEventListener('click', () => {
-    if (currentPreviewIndex < imagesData.length - 1) {
+    if (!itemsData.length) return;
+    if (currentPreviewIndex < itemsData.length - 1) {
         updatePreviewModal(currentPreviewIndex + 1);
     } else {
-         showNavFeedback('已经是最后一张图片了'); // Show feedback
+         showNavFeedback('已经是最后一张了');
     }
 });
 
@@ -692,15 +792,36 @@ modalRenameBtn.addEventListener('click', function() {
 });
 
 modalDeleteBtn.addEventListener('click', function() {
-    const filename = this.dataset.filename;
-    if (!filename) return;
-    // Populate delete confirm modal
-    deleteConfirmFilenameSpan.textContent = filename;
-    // Store necessary data on the confirm button
-    deleteConfirmBtn.dataset.categoryName = categoryName;
-    deleteConfirmBtn.dataset.filename = filename;
-    // Show delete confirm modal
-    deleteConfirmModal.show();
+    const itemId = this.dataset.itemId;
+    const itemType = this.dataset.itemType;
+    const itemName = this.dataset.itemName; // For confirmation message
+
+    if (!itemId || !itemType) {
+        console.error("Missing item ID or type for modal delete.");
+        return;
+    }
+
+    if (itemType === 'local') {
+        // Populate delete confirm modal for local file
+        deleteConfirmFilenameSpan.textContent = itemName; // itemName is filename for local
+        // Store necessary data on the confirm button for local file deletion
+        deleteConfirmBtn.dataset.categoryName = categoryName;
+        deleteConfirmBtn.dataset.filename = itemId; // itemId is filename for local
+        deleteConfirmBtn.dataset.itemType = 'local'; // Explicitly set type
+        deleteConfirmModal.show();
+    } else if (itemType === 'external') {
+        // For external links, directly confirm and then POST to delete_external_link endpoint
+        if (confirm(`确定要删除这个外部链接吗？\n${itemName}`)) {
+            const deleteUrl = `/admin/category/${encodeURIComponent(categoryName)}/external_link/${encodeURIComponent(itemId)}/delete`;
+            // Use a temporary form to POST, similar to how individual external link delete works
+            const tempForm = document.createElement('form');
+            tempForm.method = 'post';
+            tempForm.action = deleteUrl;
+            tempForm.style.display = 'none';
+            document.body.appendChild(tempForm);
+            tempForm.submit(); // This will cause a page reload
+        }
+    }
 });
 
 // Keyboard navigation
@@ -715,19 +836,21 @@ imagePreviewModalElement.addEventListener('hidden.bs.modal', () => {
 });
 
 function handleModalKeydown(event) {
+    if (!itemsData.length) return; // No items to navigate
+
     if (event.key === 'ArrowLeft') {
-        event.preventDefault(); 
+        event.preventDefault();
         if (currentPreviewIndex > 0) {
             updatePreviewModal(currentPreviewIndex - 1);
         } else {
-            showNavFeedback('已经是第一张图片了'); // Show feedback
+            showNavFeedback('已经是第一张了');
         }
     } else if (event.key === 'ArrowRight') {
         event.preventDefault();
-        if (currentPreviewIndex < imagesData.length - 1) {
+        if (currentPreviewIndex < itemsData.length - 1) {
             updatePreviewModal(currentPreviewIndex + 1);
         } else {
-            showNavFeedback('已经是最后一张图片了'); // Show feedback
+            showNavFeedback('已经是最后一张了');
         }
     }
 }
@@ -828,18 +951,33 @@ document.querySelectorAll('.delete-btn').forEach(button => {
 
 // --- Confirmation Modal Button Listeners ---
 
-// Delete Confirmation Modal -> Confirm Button Click
+// Delete Confirmation Modal -> Confirm Button Click (Now only for local files from modal)
 deleteConfirmBtn.addEventListener('click', function() {
-    const category = this.dataset.categoryName;
-    const filename = this.dataset.filename;
-    if (!category || !filename) {
-        console.error('Missing data on delete confirm button!');
+    const itemType = this.dataset.itemType;
+    if (itemType !== 'local') { // This button in this modal is now only for local
+        console.warn("Delete confirm button in modal clicked for non-local item. This shouldn't happen.");
+        deleteConfirmModal.hide();
         return;
     }
-    console.log(`Delete Confirmed (Modal) for ${category}/${filename}`);
+
+    const category = this.dataset.categoryName;
+    const filename = this.dataset.filename; // This is the item.id for local files
+
+    if (!category || !filename) {
+        console.error('Missing data on delete confirm button for local file!');
+        return;
+    }
+    console.log(`Delete Confirmed (Modal) for local file ${category}/${filename}`);
     const actionUrl = `/admin/delete_image/${encodeURIComponent(category)}/${encodeURIComponent(filename)}`;
-    deleteFormRef.action = actionUrl;
-    deleteFormRef.submit();
+    
+    // Use the existing deleteFormRef if it's still intended for single local file deletes
+    // or create a new temp form. For consistency with rename, let's use a temp form.
+    const tempForm = document.createElement('form');
+    tempForm.method = 'post';
+    tempForm.action = actionUrl;
+    tempForm.style.display = 'none';
+    document.body.appendChild(tempForm);
+    tempForm.submit();
     // No need to hide, page will refresh
 });
 
@@ -1039,33 +1177,27 @@ function updateSelectAllState() {
 
 if (batchDeleteModalElement) {
     batchDeleteModalElement.addEventListener('show.bs.modal', function (event) {
-        const selectedFiles = getSelectedFilenames(); // Use the correct function name
+        const selectedItems = getSelectedItems(); // Use the unified function
         batchDeleteFileList.innerHTML = ''; // Clear previous list
-        batchDeleteForm.innerHTML = ''; // Clear previous form inputs
+        // batchDeleteForm.innerHTML = ''; // No longer using batchDeleteForm for submission
 
-        if (selectedFiles.length === 0) {
-             alert('请至少选择一个文件进行删除。');
+        if (selectedItems.length === 0) {
+             alert('请至少选择一个项目进行删除。'); // Updated alert message
              event.preventDefault(); // Prevent modal from opening
              return;
         }
 
-        // Set form action URL dynamically
-        batchDeleteForm.action = `/admin/batch_delete/${encodeURIComponent(categoryName)}`;
+        // No longer setting batchDeleteForm.action
 
-        selectedFiles.forEach(filename => {
+        selectedItems.forEach(item => {
             // Populate list in modal body
             const li = document.createElement('li');
-            li.className = 'list-group-item list-group-item-sm'; // Use Bootstrap list classes
-            li.textContent = filename;
+            li.className = 'list-group-item list-group-item-sm';
+            li.textContent = item.name; // Display item.name (filename or URL)
             batchDeleteFileList.appendChild(li);
-
-            // Directly create the hidden input field
-            const input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = 'filenames[]'; // Ensure the name matches backend expectation
-            input.value = filename;
-            batchDeleteForm.appendChild(input);
+            // No longer creating hidden input fields for a form
         });
+        
         // Reset confirm button state
          if(confirmBatchDeleteButton) {
              confirmBatchDeleteButton.disabled = false;
@@ -1079,36 +1211,149 @@ if (batchDeleteModalElement) {
 // Handle confirm batch delete button click
 if (confirmBatchDeleteButton) {
     confirmBatchDeleteButton.addEventListener('click', () => {
-        // Check if form has action and children before submitting
-        if (!batchDeleteForm.action || batchDeleteForm.children.length === 0) {
-            // Add more debugging info
-            console.error('Batch delete form is not ready or empty.', 
-                          'Action:', batchDeleteForm.action, 
-                          'Children count:', batchDeleteForm.children.length);
-             // Optionally provide user feedback
-             alert('无法提交删除请求，请重试。');
-             // Hide modal safely
-             const modalInstance = bootstrap.Modal.getInstance(batchDeleteModalElement);
-             if(modalInstance) modalInstance.hide();
+        const selectedItems = getSelectedItems();
+        if (selectedItems.length === 0) {
+            alert('没有选中任何项目。');
+            const modalInstance = bootstrap.Modal.getInstance(batchDeleteModalElement);
+            if(modalInstance) modalInstance.hide();
             return;
         }
-        
-        // Disable button and submit form
+
         confirmBatchDeleteButton.disabled = true;
         confirmBatchDeleteButton.textContent = '删除中...';
-        batchDeleteForm.submit();
+
+        const payload = {
+            items_to_delete: selectedItems
+        };
+
+        fetch(`/admin/batch_delete_items/${encodeURIComponent(categoryName)}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                // Add CSRF token header if your app uses them
+            },
+            body: JSON.stringify(payload)
+        })
+        .then(response => response.json())
+        .then(data => {
+            console.log('Batch delete response:', data);
+            // Display detailed results in the modal or as flash messages
+            // For now, just a general message and reload
+            let successCount = 0;
+            let errorCount = 0;
+            if (data.results) {
+                data.results.forEach(result => {
+                    if (result.status === 'success') {
+                        successCount++;
+                    } else {
+                        errorCount++;
+                    }
+                });
+            }
+
+            if (errorCount === 0 && successCount > 0) {
+                createFlashMessage(`成功删除 ${successCount} 个项目。`, 'success');
+            } else if (successCount > 0 && errorCount > 0) {
+                createFlashMessage(`部分项目删除成功 (${successCount} 个)，部分失败 (${errorCount} 个)。详情请查看控制台。`, 'warning');
+            } else if (errorCount > 0 && successCount === 0) {
+                createFlashMessage(`所有选中的 ${errorCount} 个项目删除失败。详情请查看控制台。`, 'danger');
+            } else {
+                 createFlashMessage('未执行任何删除操作或未知错误。', 'info');
+            }
+            
+            // Reload after a short delay to allow flash message to be seen if it's immediately replaced
+            setTimeout(() => {
+                window.location.reload();
+            }, 1500);
+        })
+        .catch(error => {
+            console.error('Error during batch delete:', error);
+            createFlashMessage('批量删除时发生网络或服务器错误。', 'danger');
+            confirmBatchDeleteButton.disabled = false;
+            confirmBatchDeleteButton.textContent = '确认删除';
+        });
     });
 } else {
      console.error("Confirm Batch Delete button not found!");
 }
 
-// Helper function to get selected filenames
-function getSelectedFilenames() {
-    // Find selected cards and get their filename from data attribute
-    return Array.from(document.querySelectorAll('.image-wall .image-card.is-selected')).map(card => card.dataset.filename);
+// Helper function to get selected items (ID, Type, Name)
+function getSelectedItems() {
+    return Array.from(document.querySelectorAll('.image-wall .image-card.is-selected')).map(card => {
+        return {
+            id: card.dataset.itemId,
+            type: card.dataset.itemType,
+            name: card.dataset.itemName // Useful for display in confirmation
+        };
+    });
+}
+
+// --- Edit External Link Modal Handling ---
+const editExternalLinkModalElement = document.getElementById('editExternalLinkModal');
+const editExternalLinkForm = document.getElementById('editExternalLinkForm');
+const editExternalLinkIdInput = document.getElementById('editExternalLinkId');
+const editExternalLinkUrlInput = document.getElementById('editExternalLinkUrl');
+const currentExternalLinkDisplay = document.getElementById('currentExternalLinkDisplay');
+
+if (editExternalLinkModalElement) {
+    editExternalLinkModalElement.addEventListener('show.bs.modal', function(event) {
+        const button = event.relatedTarget; // Button that triggered the modal
+        const linkId = button.dataset.linkId;
+        const linkUrl = button.dataset.linkUrl;
+
+        editExternalLinkIdInput.value = linkId;
+        editExternalLinkUrlInput.value = linkUrl;
+        currentExternalLinkDisplay.textContent = linkUrl;
+        
+        // Set form action dynamically
+        editExternalLinkForm.action = `/admin/category/${encodeURIComponent(categoryName)}/external_link/${encodeURIComponent(linkId)}/edit`;
+    });
+}
+
+if (editExternalLinkForm) {
+    editExternalLinkForm.addEventListener('submit', function(event) {
+        // Basic validation, more robust validation on backend
+        if (!editExternalLinkUrlInput.value.trim()) {
+            event.preventDefault();
+            alert('URL 不能为空。');
+            // Optionally, re-focus or add more specific error display
+        }
+        // Submission will proceed as a normal form POST if not prevented
+    });
+}
+
+// The block starting at line 1117 now handles the unified logic.
+// This redundant block for batchDeleteModalElement 'show.bs.modal' (previously around 1228) is removed by the change above.
+// Ensure createFlashMessage function is available or implemented
+function createFlashMessage(message, category) {
+    const container = document.getElementById('flash-message-container');
+    if (!container) {
+        console.error('Flash message container not found!');
+        alert(`${category.toUpperCase()}: ${message}`); // Fallback
+        return;
+    }
+
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert alert-${category} alert-dismissible fade show`;
+    alertDiv.setAttribute('role', 'alert');
+    alertDiv.innerHTML = `
+        ${escapeHtml(message)}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    `;
+    container.appendChild(alertDiv);
+
+    // Auto-dismiss after 5 seconds
+    setTimeout(() => {
+        const alertInstance = bootstrap.Alert.getOrCreateInstance(alertDiv);
+        if (alertInstance) {
+            alertInstance.close();
+        } else {
+            alertDiv.remove(); // Fallback if instance not found (e.g., during rapid reloads)
+        }
+    }, 5000);
 }
 
 </script>
 
 </body>
-</html> 
+</html>
