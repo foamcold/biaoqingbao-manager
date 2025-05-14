@@ -322,7 +322,7 @@
 
         <!-- URL Upload Pane -->
         <div class="tab-pane fade" id="pills-url" role="tabpanel" aria-labelledby="pills-url-tab">
-        <form id="urlUploadForm" action="{{ url_for('upload_url_stream') }}" method="get" class="mb-3 border p-3 rounded">
+        <form id="urlUploadForm" action="{{ url_for('initiate_url_download_task') }}" method="post" class="mb-3 border p-3 rounded">
              <div class="mb-3">
                 <label for="categorySelectUrl" class="form-label">选择分类</label>
                 <select name="category" id="categorySelectUrl" class="form-select" required>
@@ -706,102 +706,180 @@ document.addEventListener('DOMContentLoaded', (event) => {
     const urlUploadList = document.getElementById('url-upload-list');
 
     if (urlUploadForm && urlCategorySelect && urlListTextArea && urlUploadList) {
-         urlUploadForm.addEventListener('submit', function(event) {
-             event.preventDefault();
-             const category = urlCategorySelect.value;
-             const urls = urlListTextArea.value.trim();
-             const baseUrl = this.action; // Gets the base /admin/upload_url_stream
+        urlUploadForm.addEventListener('submit', function(event) {
+            event.preventDefault();
+            const category = urlCategorySelect.value;
+            const urlsText = urlListTextArea.value.trim();
+            const submitButton = this.querySelector('button[type="submit"]');
 
-             if (!category) {
-                 addFlashMessage('请先选择一个分类。', 'warning');
-                 return;
-             }
-             if (!urls) {
-                 addFlashMessage('请输入至少一个 URL。', 'warning');
-                 return;
-             }
+            if (!category) {
+                addFlashMessage('请先选择一个分类。', 'warning');
+                return;
+            }
+            if (!urlsText) {
+                addFlashMessage('请输入至少一个 URL。', 'warning');
+                return;
+            }
 
-             // Clear previous list
-             urlUploadList.innerHTML = '';
+            const urlsArray = urlsText.split('\n').map(url => url.trim()).filter(url => url);
+            if (urlsArray.length === 0) {
+                addFlashMessage('请输入至少一个有效的 URL。', 'warning');
+                return;
+            }
 
-             // Construct the URL with query parameters
-             const fullUrl = `${baseUrl}?category=${encodeURIComponent(category)}&urls=${encodeURIComponent(urls)}`;
+            if(submitButton) {
+                submitButton.disabled = true;
+                submitButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 正在启动任务...';
+            }
+            urlUploadList.innerHTML = ''; // Clear previous list
 
-             const evtSource = new EventSource(fullUrl);
-
-             evtSource.addEventListener('message', function(e) {
-                 const data = JSON.parse(e.data);
-                 console.log("SSE Message:", data);
-                 if (data.type === 'info') {
-                     // Maybe display a general status message
-                     addFlashMessage(data.message, 'info');
-                 }
-             });
-
-            evtSource.addEventListener('progress', function(e) {
-                const data = JSON.parse(e.data);
-                console.log("SSE Progress:", data);
-                let progressElement = document.getElementById(data.id);
-
-                if (!progressElement) {
-                    progressElement = createProgressElement(data.id, data.url);
-                    urlUploadList.appendChild(progressElement);
+            fetch("{{ url_for('initiate_url_download_task') }}", {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ category: category, urls: urlsArray })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(errData => {
+                        throw new Error(errData.message || `HTTP 错误! 状态: ${response.status}`);
+                    }).catch(() => {
+                        throw new Error(`HTTP 错误! 状态: ${response.status}`);
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (submitButton) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = '批量上传 URL';
                 }
 
-                const progressBar = progressElement.querySelector('.progress-bar');
-                const statusIcon = progressElement.querySelector('.status-icon');
-                const statusText = progressElement.querySelector('.file-name'); // Update text to show URL status
-
-                statusText.textContent = `${data.url} (${data.status})`;
-
-                if (data.status === '准备中') {
-                    progressBar.style.width = '0%';
-                    progressBar.textContent = '0%';
-                    progressBar.classList.remove('bg-success', 'bg-danger');
-                    statusIcon.className = 'status-icon';
-                } else if (data.status === '下载中') {
-                    const percent = data.progress >= 0 ? data.progress : 0;
-                    progressBar.style.width = percent + '%';
-                    progressBar.textContent = percent + '%';
-                    progressBar.classList.remove('bg-success', 'bg-danger');
-                    statusIcon.className = 'status-icon'; // No icon during progress
-                    // Display downloaded bytes if available
-                    if(data.downloaded !== undefined && data.total !== undefined && data.total !== null) {
-                         progressBar.textContent = `${formatBytes(data.downloaded)} / ${formatBytes(data.total)} (${percent}%)`;
-                    } else if (data.downloaded !== undefined) {
-                         progressBar.textContent = `${formatBytes(data.downloaded)} (${percent}%)`;
+                if (data.task_id) {
+                    const taskId = data.task_id;
+                    addFlashMessage(`任务 ${taskId} 已成功启动。正在等待服务器处理...`, 'info');
+                    if(submitButton) {
+                        submitButton.disabled = true; // Disable again while SSE is active
+                        submitButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 处理中...';
                     }
 
-                } else if (data.status === '完成') {
-                    progressBar.style.width = '100%';
-                    progressBar.classList.add('bg-success');
-                    progressBar.textContent = '完成';
-                    statusIcon.className = 'status-icon status-success bi bi-check-circle-fill';
-                    statusText.textContent = `${data.url} -> ${data.new_filename} (完成)`;
-                     // Optional: addFlashMessage(`URL ${data.url} 下载为 ${data.new_filename} 成功。`, 'success');
-                } else if (data.status === '错误') {
-                    progressBar.style.width = '100%';
-                    progressBar.classList.add('bg-danger');
-                    progressBar.textContent = '错误';
-                    statusIcon.className = 'status-icon status-error bi bi-x-circle-fill';
-                    addFlashMessage(`处理 URL ${data.url} 失败: ${data.message}`, 'danger');
+                    const evtSourceUrl = `{{ url_for('stream_url_download_progress') }}?task_id=${taskId}`;
+                    const evtSource = new EventSource(evtSourceUrl);
+                    
+                    evtSource.addEventListener('message', function(e) {
+                        const eventData = JSON.parse(e.data);
+                        console.log("SSE General Message:", eventData);
+                        if (eventData.type === 'info') {
+                            addFlashMessage(eventData.message, 'info');
+                        }
+                    });
+
+                    evtSource.addEventListener('progress', function(e) {
+                        const eventData = JSON.parse(e.data);
+                        console.log("SSE Progress Data:", eventData);
+                        
+                        let progressElement = document.getElementById(eventData.id); // eventData.id is like "task-uuid-item-index"
+                        if (!progressElement) {
+                            progressElement = createProgressElement(eventData.id, eventData.url);
+                            urlUploadList.appendChild(progressElement);
+                        }
+
+                        const progressBar = progressElement.querySelector('.progress-bar');
+                        const statusIcon = progressElement.querySelector('.status-icon');
+                        const statusTextElement = progressElement.querySelector('.file-name');
+
+                        statusTextElement.textContent = `${eventData.url} (${eventData.status})`;
+                        statusTextElement.title = `${eventData.url} (${eventData.status})`;
+
+                        if (eventData.status === '准备中') {
+                            progressBar.style.width = '0%';
+                            progressBar.textContent = '0%';
+                            progressBar.className = 'progress-bar bg-secondary';
+                            statusIcon.className = 'status-icon';
+                        } else if (eventData.status === '下载中') {
+                            const percent = eventData.progress >= 0 ? eventData.progress : 0;
+                            progressBar.style.width = percent + '%';
+                            progressBar.className = 'progress-bar bg-info progress-bar-striped progress-bar-animated';
+                            statusIcon.className = 'status-icon';
+                            
+                            if(eventData.downloaded !== undefined && eventData.total !== undefined && eventData.total !== null && eventData.total > 0) {
+                                progressBar.textContent = `${formatBytes(eventData.downloaded)} / ${formatBytes(eventData.total)} (${percent}%)`;
+                            } else if (eventData.downloaded !== undefined) {
+                                progressBar.textContent = `${formatBytes(eventData.downloaded)} (${percent}%)`;
+                            } else {
+                                progressBar.textContent = `${percent}%`;
+                            }
+                        } else if (eventData.status === '完成') {
+                            progressBar.style.width = '100%';
+                            progressBar.className = 'progress-bar bg-success';
+                            progressBar.textContent = '完成';
+                            statusIcon.className = 'status-icon status-success bi bi-check-circle-fill';
+                            if (eventData.new_filename) {
+                                statusTextElement.textContent = `${eventData.url} -> ${eventData.new_filename} (完成)`;
+                                statusTextElement.title = `${eventData.url} -> ${eventData.new_filename} (完成)`;
+                            }
+                        } else if (eventData.status === '错误') {
+                            progressBar.style.width = '100%';
+                            progressBar.className = 'progress-bar bg-danger';
+                            progressBar.textContent = '错误';
+                            statusIcon.className = 'status-icon status-error bi bi-x-circle-fill';
+                            if (eventData.message) {
+                                statusTextElement.textContent = `${eventData.url} (错误: ${eventData.message})`;
+                                statusTextElement.title = `${eventData.url} (错误: ${eventData.message})`;
+                            }
+                        }
+                    });
+
+                    evtSource.addEventListener('end', function(e) {
+                        const eventData = JSON.parse(e.data);
+                        console.log("SSE Stream End:", eventData);
+                        addFlashMessage(eventData.message || '所有 URL 处理完毕。', 'success');
+                        if(evtSource) evtSource.close();
+                        urlListTextArea.value = '';
+                        if(submitButton) {
+                            submitButton.disabled = false;
+                            submitButton.textContent = '批量上传 URL';
+                        }
+                    });
+                    
+                    evtSource.addEventListener('error', function(e) {
+                        let errorMessage = '连接服务器进行状态更新时出错，或连接已关闭。';
+                        if (e.data) {
+                            try {
+                                const errorData = JSON.parse(e.data);
+                                errorMessage = errorData.message || errorMessage;
+                            } catch (parseError) {
+                                console.error("Could not parse SSE error data:", e.data);
+                            }
+                        }
+                        addFlashMessage(errorMessage, 'danger');
+                        console.error("SSE Error Event:", e);
+                        if(evtSource) evtSource.close();
+                        if(submitButton) {
+                            submitButton.disabled = false;
+                            submitButton.textContent = '批量上传 URL';
+                        }
+                    });
+
+                } else {
+                    addFlashMessage(data.message || '启动批量下载任务失败 (未返回任务ID)。', 'danger');
+                    console.error("Failed to initiate task, no task_id:", data);
+                     if(submitButton) {
+                        submitButton.disabled = false;
+                        submitButton.textContent = '批量上传 URL';
+                    }
                 }
+            })
+            .catch(error => {
+                if (submitButton) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = '批量上传 URL';
+                }
+                console.error('Fetch POST error:', error);
+                addFlashMessage(`启动URL下载任务时发生客户端错误: ${error.message}`, 'danger');
             });
-
-            evtSource.addEventListener('end', function(e) {
-                console.log("SSE Stream End:", e);
-                addFlashMessage('所有 URL 处理完毕。', 'info');
-                evtSource.close();
-                // Clear textarea after completion?
-                 urlListTextArea.value = ''; 
-            });
-
-            evtSource.onerror = function(e) {
-                console.error("EventSource failed:", e);
-                addFlashMessage('连接服务器时出错，请重试。', 'danger');
-                evtSource.close();
-            };
-         });
+        });
     }
 
     // --- External Link Upload AJAX Handling ---

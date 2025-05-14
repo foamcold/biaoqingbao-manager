@@ -23,6 +23,11 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 ALLOWED_PER_PAGE = [50, 100, 150, 200, 250, 300]
 ADMIN_ALLOWED_PER_PAGE = [10, 20, 30, 40, 50]
 
+# Global store for URL processing tasks (for simplicity in this example)
+# WARNING: This in-memory dict is not suitable for multi-worker Gunicorn setups in production.
+# Consider Redis or another shared store for production.
+url_processing_tasks = {}
+
 if not os.path.exists(app.config['EMOTICONS_FOLDER']):
     os.makedirs(app.config['EMOTICONS_FOLDER'])
 
@@ -397,39 +402,75 @@ def upload_file():
         app.logger.error(f"Error saving file {original_full_filename}: {e}")
         return jsonify(status='error', message=f'保存文件时出错: {e}', filename=original_full_filename), 500
 
-@app.route('/admin/upload_url_stream')
+@app.route('/admin/initiate_url_download_task', methods=['POST'])
 @login_required
-def upload_url_stream():
-    category_name_raw = request.args.get('category', '')
-    urls_text = request.args.get('urls', '')
-    image_urls = [url.strip() for url in urls_text.splitlines() if url.strip()]
-
-    # Validate the category name from the query args
-    if not is_valid_category_name(category_name_raw):
-        # SSE requires a text/event-stream response, even for errors initially
-        # We can send an error event or just close the stream with an HTTP error later.
-        # For simplicity, let's log and return a 400 for now.
-        app.logger.error(f"Invalid category name for URL upload: {category_name_raw}")
-        return "Error: Invalid category name", 400
-
-    if not image_urls:
-        return "Error: No URLs provided", 400
-    
-    # Use the validated name directly for path construction
-    category_path = os.path.join(app.config['EMOTICONS_FOLDER'], category_name_raw)
-    if not os.path.isdir(category_path):
-         app.logger.error(f"Category not found for URL upload: {category_path}")
-         # Use original name in error message
-         return f"Error: Category '{category_name_raw}' not found", 400
-
-    def generate():
-        yield f"event: message\ndata: {json.dumps({'type': 'info', 'message': '开始处理 URL 列表...'})}\n\n"
+def initiate_url_download_task():
+    try:
+        data = request.get_json()
+        if not data:
+            app.logger.error("Initiate task: No JSON body received.")
+            return jsonify(status='error', message='请求体必须是JSON格式。'), 400
         
+        category_name_raw = data.get('category')
+        urls = data.get('urls')
+
+        if not is_valid_category_name(category_name_raw):
+            app.logger.warning(f"Initiate task: Invalid category name '{category_name_raw}'.")
+            return jsonify(status='error', message='无效的分类名称。'), 400
+        
+        if not urls or not isinstance(urls, list) or not all(isinstance(url, str) and url.strip() for url in urls):
+            app.logger.warning(f"Initiate task: Invalid URLs list for category '{category_name_raw}'.")
+            return jsonify(status='error', message='URL列表必须是一个包含有效URL字符串的非空数组。'), 400
+
+        category_path = os.path.join(app.config['EMOTICONS_FOLDER'], category_name_raw)
+        if not os.path.isdir(category_path):
+            app.logger.warning(f"Initiate task: Category '{category_name_raw}' not found at path '{category_path}'.")
+            return jsonify(status='error', message=f'分类 "{category_name_raw}" 不存在。'), 404
+
+        task_id = str(uuid.uuid4())
+        url_processing_tasks[task_id] = {
+            'category': category_name_raw,
+            'urls': [url.strip() for url in urls], # Store cleaned URLs
+            'status': 'pending',
+            'created_at': datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+        app.logger.info(f"Task {task_id} initiated for category '{category_name_raw}' with {len(urls)} URLs.")
+        return jsonify({'task_id': task_id, 'status': 'Task initiated successfully'}), 202
+    except Exception as e:
+        app.logger.error(f"Error in initiate_url_download_task: {e}", exc_info=True)
+        return jsonify(status='error', message=f'启动任务时发生内部服务器错误。'), 500
+
+@app.route('/admin/stream_url_download_progress') # New route name
+@login_required
+def stream_url_download_progress(): # New function name
+    task_id = request.args.get('task_id')
+    if not task_id:
+        app.logger.error("SSE stream: task_id missing.")
+        def error_stream_no_task_id():
+            yield f"event: error\ndata: {json.dumps({'message': '错误：缺少任务ID。'})}\n\n"
+        return Response(error_stream_no_task_id(), mimetype='text/event-stream')
+
+    task_data = url_processing_tasks.get(task_id)
+    if not task_data:
+        app.logger.error(f"SSE stream: Task ID '{task_id}' not found or expired.")
+        def error_stream_invalid_task_id():
+            yield f"event: error\ndata: {json.dumps({'message': '错误：无效或已过期的任务ID。'})}\n\n"
+        return Response(error_stream_invalid_task_id(), mimetype='text/event-stream')
+
+    category_name_raw = task_data['category']
+    image_urls = task_data['urls']
+    category_path = os.path.join(app.config['EMOTICONS_FOLDER'], category_name_raw)
+
+    def generate_events_for_task(): # Renamed the inner generator
+        app.logger.info(f"SSE stream starting for task_id: {task_id} (Category: {category_name_raw}, URLs: {len(image_urls)})")
+        yield f"event: message\ndata: {json.dumps({'type': 'info', 'message': f'开始处理任务 {task_id}，共 {len(image_urls)} 个 URL...'})}\n\n"
+        
+        processed_count = 0
         for index, image_url in enumerate(image_urls):
-            safe_timestamp_id = str(datetime.datetime.now().timestamp()).replace('.', '_')
-            url_id = f"url-{index}-{safe_timestamp_id}"
-            app.logger.info(f"[SSE {url_id}] 处理 URL: {image_url}")
-            yield f"event: progress\ndata: {json.dumps({'id': url_id, 'url': image_url, 'status': '准备中', 'progress': 0})}\n\n"
+            progress_item_id = f"task-{task_id}-item-{index}" # Unique ID for frontend element
+            
+            app.logger.info(f"[Task {task_id} - Item {progress_item_id}] 处理 URL: {image_url}")
+            yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '准备中', 'progress': 0})}\n\n"
             
             try:
                 parsed_url = urlparse(image_url)
@@ -440,8 +481,7 @@ def upload_url_stream():
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
                 response = requests.get(clean_url, stream=True, timeout=20, headers=headers)
                 response.raise_for_status()
-                app.logger.info(f"[SSE {url_id}] 响应头: {response.headers}")
-
+                
                 content_type = response.headers.get('content-type')
                 content_type_main = content_type.split(';')[0].strip().lower() if content_type else ''
                 if content_type_main not in ('image/jpeg', 'image/png', 'image/gif'):
@@ -458,6 +498,7 @@ def upload_url_stream():
                 original_filename = os.path.basename(parsed_url.path) or "image"
                 filename_base, _ = os.path.splitext(original_filename)
                 safe_filename_base = secure_filename(filename_base)
+                if not safe_filename_base: safe_filename_base = "image"
                 timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
                 safe_extension = file_extension.lower()
                 if not safe_extension.startswith('.'): safe_extension = '.' + safe_extension
@@ -465,49 +506,45 @@ def upload_url_stream():
                 save_path = os.path.join(category_path, new_filename)
                 
                 total_size_str = response.headers.get('content-length')
-                app.logger.info(f"[SSE {url_id}] Content-Length: {total_size_str}")
-                total_size = None
-                if total_size_str:
-                    try:
-                        total_size = int(total_size_str)
-                    except ValueError:
-                        app.logger.warning(f"[SSE {url_id}] 无效的 Content-Length 值: {total_size_str}")
-                        total_size = None
+                total_size = int(total_size_str) if total_size_str and total_size_str.isdigit() else None
                 
                 downloaded_size = 0
                 last_yield_time = datetime.datetime.now()
 
-                yield f"event: progress\ndata: {json.dumps({'id': url_id, 'url': image_url, 'status': '下载中', 'progress': 0})}\n\n"
+                yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '下载中', 'progress': 0, 'downloaded': 0, 'total': total_size})}\n\n"
 
                 with open(save_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                        downloaded_size += len(chunk)
-                        now = datetime.datetime.now()
-                        if (now - last_yield_time).total_seconds() > 0.1 or (total_size is not None and downloaded_size == total_size):
-                            progress_percent = -1
-                            if total_size is not None and total_size > 0:
-                                progress_percent = round((downloaded_size / total_size) * 100)
-                            
-                            app.logger.debug(f"[SSE {url_id}] Yielding progress: {progress_percent}%, DL: {downloaded_size}, Total: {total_size}")
-                            yield f"event: progress\ndata: {json.dumps({'id': url_id, 'url': image_url, 'status': '下载中', 'progress': progress_percent, 'downloaded': downloaded_size, 'total': total_size})}\n\n"
-                            last_yield_time = now
+                        if chunk:
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                            now = datetime.datetime.now()
+                            if (now - last_yield_time).total_seconds() > 0.1 or (total_size is not None and downloaded_size == total_size):
+                                progress_percent = -1
+                                if total_size is not None and total_size > 0:
+                                    progress_percent = round((downloaded_size / total_size) * 100)
+                                
+                                yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '下载中', 'progress': progress_percent, 'downloaded': downloaded_size, 'total': total_size})}\n\n"
+                                last_yield_time = now
                 
-                app.logger.info(f"[SSE {url_id}] 下载完成，保存为: {new_filename}")
-                yield f"event: progress\ndata: {json.dumps({'id': url_id, 'url': image_url, 'status': '完成', 'progress': 100, 'new_filename': new_filename, 'message': '上传成功'})}\n\n"
-
+                app.logger.info(f"[Task {task_id} - Item {progress_item_id}] 下载完成: {new_filename}")
+                yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '完成', 'progress': 100, 'new_filename': new_filename, 'message': '上传成功'})}\n\n"
+                processed_count +=1
             except requests.exceptions.RequestException as e:
-                app.logger.warning(f"[SSE {url_id}] Error downloading URL {image_url}: {e}")
-                yield f"event: progress\ndata: {json.dumps({'id': url_id, 'url': image_url, 'status': '错误', 'progress': 0, 'message': f'下载失败: {e}'})}\n\n"
+                app.logger.warning(f"[Task {task_id} - Item {progress_item_id}] Error downloading URL {image_url}: {e}")
+                yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '错误', 'progress': 0, 'message': f'下载失败: {str(e)}'})}\n\n"
             except (IOError, ValueError, Exception) as e:
-                app.logger.warning(f"[SSE {url_id}] Error processing URL {image_url}: {e}")
-                yield f"event: progress\ndata: {json.dumps({'id': url_id, 'url': image_url, 'status': '错误', 'progress': 0, 'message': f'处理失败: {e}'})}\n\n"
+                app.logger.warning(f"[Task {task_id} - Item {progress_item_id}] Error processing URL {image_url}: {e}", exc_info=True)
+                yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '错误', 'progress': 0, 'message': f'处理失败: {str(e)}'})}\n\n"
         
-        app.logger.info("[SSE] 所有 URL 处理完毕")
-        yield f"event: end\ndata: {json.dumps({'message': '所有 URL 处理完毕'})}\n\n"
-    # End of generate() function
-
-    return Response(generate(), mimetype='text/event-stream')
+        app.logger.info(f"[Task {task_id}] 所有 URL 处理完毕. Processed: {processed_count}/{len(image_urls)}")
+        yield f"event: end\ndata: {json.dumps({'message': f'任务 {task_id} 处理完毕。成功处理 {processed_count} / {len(image_urls)} 个 URL。'})}\n\n"
+        
+        if task_id in url_processing_tasks:
+            del url_processing_tasks[task_id]
+            app.logger.info(f"Task {task_id} data removed from memory.")
+    
+    return Response(generate_events_for_task(), mimetype='text/event-stream')
 @app.route('/admin/category/<path:category_name>/add_external_links', methods=['POST'])
 @login_required
 def add_external_links(category_name):
