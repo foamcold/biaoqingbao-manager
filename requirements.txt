@@ -3,4 +3,3 @@ requests
 python-dotenv
 gunicorn
 # Add gunicorn or waitress if you choose one
-gevent

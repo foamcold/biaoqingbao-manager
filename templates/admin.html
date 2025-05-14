@@ -706,85 +706,64 @@ document.addEventListener('DOMContentLoaded', (event) => {
     const urlUploadList = document.getElementById('url-upload-list');
 
     if (urlUploadForm && urlCategorySelect && urlListTextArea && urlUploadList) {
-        urlUploadForm.addEventListener('submit', function(event) {
-            event.preventDefault();
-            const category = urlCategorySelect.value;
-            const urlsText = urlListTextArea.value.trim();
-            const submitButton = this.querySelector('button[type="submit"]');
+        const BATCH_SIZE = 10;
+        let allUrls = [];
+        let currentBatchIndex = 0;
+        let totalBatches = 0;
+        let submitButtonUrlUpload; // To store the submit button reference
 
-            if (!category) {
-                addFlashMessage('请先选择一个分类。', 'warning');
-                return;
-            }
-            if (!urlsText) {
-                addFlashMessage('请输入至少一个 URL。', 'warning');
-                return;
-            }
+        async function processBatch(batchUrls, category, batchNum, totalBatchCount) {
+            return new Promise(async (resolve, reject) => {
+                if (!batchUrls || batchUrls.length === 0) {
+                    resolve({success: true, message: "当前批次为空，跳过。"});
+                    return;
+                }
 
-            const urlsArray = urlsText.split('\n').map(url => url.trim()).filter(url => url);
-            if (urlsArray.length === 0) {
-                addFlashMessage('请输入至少一个有效的 URL。', 'warning');
-                return;
-            }
+                urlUploadList.innerHTML = ''; // Clear previous batch's progress
+                addFlashMessage(`开始处理第 ${batchNum} / ${totalBatchCount} 批 (${batchUrls.length} 个URL)...`, 'info');
+                
+                let evtSource; // Declare here to be accessible in finally block
 
-            if(submitButton) {
-                submitButton.disabled = true;
-                submitButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 正在启动任务...';
-            }
-            urlUploadList.innerHTML = ''; // Clear previous list
-
-            fetch("{{ url_for('initiate_url_download_task') }}", {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ category: category, urls: urlsArray })
-            })
-            .then(response => {
-                if (!response.ok) {
-                    return response.json().then(errData => {
-                        throw new Error(errData.message || `HTTP 错误! 状态: ${response.status}`);
-                    }).catch(() => {
-                        throw new Error(`HTTP 错误! 状态: ${response.status}`);
+                try {
+                    const response = await fetch("{{ url_for('initiate_url_download_task') }}", {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ category: category, urls: batchUrls })
                     });
-                }
-                return response.json();
-            })
-            .then(data => {
-                if (submitButton) {
-                    submitButton.disabled = false;
-                    submitButton.textContent = '批量上传 URL';
-                }
 
-                if (data.task_id) {
-                    const taskId = data.task_id;
-                    addFlashMessage(`任务 ${taskId} 已成功启动。正在等待服务器处理...`, 'info');
-                    if(submitButton) {
-                        submitButton.disabled = true; // Disable again while SSE is active
-                        submitButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 处理中...';
+                    if (!response.ok) {
+                        const errData = await response.json().catch(() => ({ message: `HTTP 错误! 状态: ${response.status}` }));
+                        throw new Error(errData.message || `HTTP 错误! 状态: ${response.status}`);
                     }
 
+                    const data = await response.json();
+                    if (!data.task_id) {
+                        throw new Error(data.message || '启动批量下载任务失败 (未返回任务ID)。');
+                    }
+
+                    const taskId = data.task_id;
+                    addFlashMessage(`批次 ${batchNum} (任务 ${taskId}) 已启动。`, 'info');
+
                     const evtSourceUrl = `{{ url_for('stream_url_download_progress') }}?task_id=${taskId}`;
-                    const evtSource = new EventSource(evtSourceUrl);
-                    
-                    evtSource.addEventListener('message', function(e) {
+                    evtSource = new EventSource(evtSourceUrl);
+
+                    evtSource.onmessage = function(e) { // Default 'message' listener
                         const eventData = JSON.parse(e.data);
                         console.log("SSE General Message:", eventData);
                         if (eventData.type === 'info') {
-                            addFlashMessage(eventData.message, 'info');
+                            // addFlashMessage(eventData.message, 'info'); // Might be too noisy for batch info
                         }
-                    });
+                    };
 
                     evtSource.addEventListener('progress', function(e) {
                         const eventData = JSON.parse(e.data);
-                        console.log("SSE Progress Data:", eventData);
-                        
-                        let progressElement = document.getElementById(eventData.id); // eventData.id is like "task-uuid-item-index"
+                        // console.log("SSE Progress Data:", eventData);
+                        let progressElement = document.getElementById(eventData.id);
                         if (!progressElement) {
                             progressElement = createProgressElement(eventData.id, eventData.url);
                             urlUploadList.appendChild(progressElement);
                         }
-
+                        // Update progress bar (using existing logic from createProgressElement/update)
                         const progressBar = progressElement.querySelector('.progress-bar');
                         const statusIcon = progressElement.querySelector('.status-icon');
                         const statusTextElement = progressElement.querySelector('.file-name');
@@ -793,108 +772,125 @@ document.addEventListener('DOMContentLoaded', (event) => {
                         statusTextElement.title = `${eventData.url} (${eventData.status})`;
 
                         if (eventData.status === '准备中') {
-                            progressBar.style.width = '0%';
-                            progressBar.textContent = '0%';
-                            progressBar.className = 'progress-bar bg-secondary';
-                            statusIcon.className = 'status-icon';
-                        } else if (eventData.status === '下载中') {
+                            progressBar.style.width = '0%'; progressBar.textContent = '0%'; progressBar.className = 'progress-bar bg-secondary'; statusIcon.className = 'status-icon';
+                        } else if (eventData.status.startsWith('下载中')) { // Match "下载中 (尝试 X)"
                             const percent = eventData.progress >= 0 ? eventData.progress : 0;
-                            progressBar.style.width = percent + '%';
-                            progressBar.className = 'progress-bar bg-info progress-bar-striped progress-bar-animated';
-                            statusIcon.className = 'status-icon';
-                            
+                            progressBar.style.width = percent + '%'; progressBar.className = 'progress-bar bg-info progress-bar-striped progress-bar-animated'; statusIcon.className = 'status-icon';
                             if(eventData.downloaded !== undefined && eventData.total !== undefined && eventData.total !== null && eventData.total > 0) {
                                 progressBar.textContent = `${formatBytes(eventData.downloaded)} / ${formatBytes(eventData.total)} (${percent}%)`;
-                            } else if (eventData.downloaded !== undefined) {
-                                progressBar.textContent = `${formatBytes(eventData.downloaded)} (${percent}%)`;
-                            } else {
-                                progressBar.textContent = `${percent}%`;
-                            }
+                            } else if (eventData.downloaded !== undefined) { progressBar.textContent = `${formatBytes(eventData.downloaded)} (${percent}%)`; }
+                            else { progressBar.textContent = `${percent}%`; }
                         } else if (eventData.status === '完成') {
-                            progressBar.style.width = '100%';
-                            progressBar.className = 'progress-bar bg-success';
-                            progressBar.textContent = '完成';
-                            statusIcon.className = 'status-icon status-success bi bi-check-circle-fill';
-                            if (eventData.new_filename) {
-                                statusTextElement.textContent = `${eventData.url} -> ${eventData.new_filename} (完成)`;
-                                statusTextElement.title = `${eventData.url} -> ${eventData.new_filename} (完成)`;
-                            }
+                            progressBar.style.width = '100%'; progressBar.className = 'progress-bar bg-success'; progressBar.textContent = '完成'; statusIcon.className = 'status-icon status-success bi bi-check-circle-fill';
+                            if (eventData.new_filename) statusTextElement.textContent = `${eventData.url} -> ${eventData.new_filename} (完成)`;
                         } else if (eventData.status === '错误') {
-                            progressBar.style.width = '100%';
-                            progressBar.className = 'progress-bar bg-danger';
-                            progressBar.textContent = '错误';
-                            statusIcon.className = 'status-icon status-error bi bi-x-circle-fill';
-                            if (eventData.message) {
-                                statusTextElement.textContent = `${eventData.url} (错误: ${eventData.message})`;
-                                statusTextElement.title = `${eventData.url} (错误: ${eventData.message})`;
-                            }
+                            progressBar.style.width = '100%'; progressBar.className = 'progress-bar bg-danger'; progressBar.textContent = '错误'; statusIcon.className = 'status-icon status-error bi bi-x-circle-fill';
+                            if (eventData.message) statusTextElement.textContent = `${eventData.url} (错误: ${eventData.message})`;
                         }
                     });
 
                     evtSource.addEventListener('end', function(e) {
                         const eventData = JSON.parse(e.data);
-                        console.log("SSE Stream End:", eventData);
-                        addFlashMessage(eventData.message || '所有 URL 处理完毕。', 'success');
+                        console.log(`SSE Stream End for batch ${batchNum}:`, eventData);
+                        addFlashMessage(eventData.message || `批次 ${batchNum} 处理完毕。`, 'success');
                         if(evtSource) evtSource.close();
-                        urlListTextArea.value = '';
-                        if(submitButton) {
-                            submitButton.disabled = false;
-                            submitButton.textContent = '批量上传 URL';
-                        }
+                        resolve({success: true, processedUrls: batchUrls});
                     });
                     
                     evtSource.addEventListener('heartbeat', function(e) {
                         const eventData = JSON.parse(e.data);
-                        console.log("SSE Heartbeat received:", eventData.timestamp);
-                        // This confirms heartbeats are working.
-                        // No UI update needed for heartbeat itself unless desired for debugging.
+                        console.log(`SSE Heartbeat for batch ${batchNum}:`, eventData.timestamp);
                     });
                     
                     evtSource.addEventListener('error', function(e) {
-                        console.error("SSE Error Event:", e); // Log the full error event for debugging
-                        let userMessage = '与服务器的状态更新连接发生错误。后续进度可能无法显示。';
-                        
+                        console.error(`SSE Error for batch ${batchNum}:`, e);
+                        let userMessage = `批次 ${batchNum} 的状态更新连接发生错误。`;
                         if (e.target && e.target.readyState === EventSource.CLOSED) {
-                            userMessage = '与服务器的状态更新连接已意外关闭。后续进度将无法接收。请检查网络连接。如果问题持续，可能与服务器配置或网络环境有关。';
-                        } else if (e.message) { // Some error events might have a message property (less common for EventSource)
-                            userMessage += ` 详情: ${e.message}`;
-                        } else if (e.type && e.type !== 'error') { // e.type is often just 'error'
-                             userMessage += ` 类型: ${e.type}`;
+                            userMessage = `批次 ${batchNum} 的状态更新连接已意外关闭。`;
                         }
-                        // Note: Browser-specific network errors like 'net::ERR_HTTP2_PROTOCOL_ERROR'
-                        // are typically logged by the browser console directly and not always available in the event 'e' object here.
-                        // The console.error above will show the event 'e', but the browser console is key for network-level errors.
-
                         addFlashMessage(userMessage, 'danger');
-                        
-                        if(evtSource) {
-                            evtSource.close(); // Ensure EventSource is closed
-                        }
-                        
-                        // Re-enable the submit button
-                        if (submitButton) { // submitButton should be defined in the outer scope
-                            submitButton.disabled = false;
-                            submitButton.textContent = '批量上传 URL';
-                        }
+                        if(evtSource) evtSource.close();
+                        reject(new Error(userMessage)); // Reject promise to stop further batch processing
                     });
 
-                } else {
-                    addFlashMessage(data.message || '启动批量下载任务失败 (未返回任务ID)。', 'danger');
-                    console.error("Failed to initiate task, no task_id:", data);
-                     if(submitButton) {
-                        submitButton.disabled = false;
-                        submitButton.textContent = '批量上传 URL';
-                    }
+                } catch (error) {
+                    console.error(`Error processing batch ${batchNum}:`, error);
+                    addFlashMessage(`处理批次 ${batchNum} 失败: ${error.message}`, 'danger');
+                    if(evtSource) evtSource.close();
+                    reject(error); // Reject promise
                 }
-            })
-            .catch(error => {
-                if (submitButton) {
-                    submitButton.disabled = false;
-                    submitButton.textContent = '批量上传 URL';
-                }
-                console.error('Fetch POST error:', error);
-                addFlashMessage(`启动URL下载任务时发生客户端错误: ${error.message}`, 'danger');
             });
+        }
+
+        async function startBatchProcessing() {
+            const category = urlCategorySelect.value;
+            const urlsText = urlListTextArea.value.trim();
+            submitButtonUrlUpload = urlUploadForm.querySelector('button[type="submit"]');
+
+            if (!category) { addFlashMessage('请先选择一个分类。', 'warning'); return; }
+            if (!urlsText) { addFlashMessage('请输入至少一个 URL。', 'warning'); return; }
+
+            allUrls = urlsText.split('\n').map(url => url.trim()).filter(url => url);
+            if (allUrls.length === 0) { addFlashMessage('请输入至少一个有效的 URL。', 'warning'); return; }
+
+            urlBatches = [];
+            for (let i = 0; i < allUrls.length; i += BATCH_SIZE) {
+                urlBatches.push(allUrls.slice(i, i + BATCH_SIZE));
+            }
+            totalBatches = urlBatches.length;
+            currentBatchIndex = 0;
+
+            if (submitButtonUrlUpload) {
+                submitButtonUrlUpload.disabled = true;
+                submitButtonUrlUpload.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 处理中 (0%)...';
+            }
+            
+            let overallSuccess = true;
+            for (const batch of urlBatches) {
+                currentBatchIndex++;
+                if (submitButtonUrlUpload) {
+                    const overallProgress = Math.round(((currentBatchIndex -1) / totalBatches) * 100);
+                    submitButtonUrlUpload.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 处理中 (${overallProgress}%)...`;
+                }
+                try {
+                    const result = await processBatch(batch, category, currentBatchIndex, totalBatches);
+                    if (result.success && result.processedUrls) {
+                        // Remove processed URLs from textarea
+                        let currentTextUrls = urlListTextArea.value.split('\n');
+                        result.processedUrls.forEach(processedUrl => {
+                            const indexToRemove = currentTextUrls.findIndex(line => line.trim() === processedUrl);
+                            if (indexToRemove !== -1) {
+                                currentTextUrls.splice(indexToRemove, 1);
+                            }
+                        });
+                        urlListTextArea.value = currentTextUrls.join('\n');
+                    }
+                } catch (error) {
+                    overallSuccess = false;
+                    addFlashMessage(`批处理因错误中止于第 ${currentBatchIndex} 批。`, 'danger');
+                    break; // Stop processing further batches on error
+                }
+            }
+
+            if (submitButtonUrlUpload) {
+                submitButtonUrlUpload.disabled = false;
+                submitButtonUrlUpload.textContent = '批量上传 URL';
+            }
+            urlUploadList.innerHTML = ''; // Clear progress list at the very end
+
+            if (overallSuccess) {
+                addFlashMessage('所有批次处理完成！', 'success');
+                if(urlListTextArea.value.trim() === '') { // If all URLs were processed and removed
+                    // Optionally clear category or other fields
+                }
+            } else {
+                addFlashMessage('批处理未能全部完成，请检查剩余URL并重试。', 'warning');
+            }
+        }
+
+        urlUploadForm.addEventListener('submit', function(event) {
+            event.preventDefault();
+            startBatchProcessing();
         });
     }
 

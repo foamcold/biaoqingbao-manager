@@ -10,7 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
 # 安装系统依赖（如果需要，例如用于 Pillow 或其他 C 扩展）
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3-dev && rm -rf /var/lib/apt/lists/*
+# Build dependencies were here, removed as gevent is removed.
 
 # 复制依赖文件
 COPY requirements.txt .
@@ -27,4 +27,4 @@ EXPOSE 5000
 # 使用 Gunicorn 运行应用
 # 注意：确保 app:app 中的 "app" 与你的 Flask 应用实例变量名以及文件名匹配
 # 如果你的主文件是 main.py 并且 Flask 实例是 my_flask_app，则应为 main:my_flask_app
-CMD ["gunicorn", "--worker-class", "gevent", "--workers", "4", "--timeout", "660", "--bind", "0.0.0.0:5000", "app:app"]
+CMD ["gunicorn", "--workers", "1", "--timeout", "660", "--bind", "0.0.0.0:5000", "app:app"]
