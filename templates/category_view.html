@@ -368,14 +368,15 @@
                                  alt="外部链接: {{ item.name }}"
                                  loading="lazy"
                                  class="img-thumbnail"
-                                 onerror="this.style.display='none'; this.parentElement.innerHTML += '<div class=\'text-danger small\'>外部图片无法加载<br><a href=\'{{ item.view_url }}\' target=\'_blank\' class=\'btn btn-sm btn-link p-0\'>尝试打开原始链接</a></div>';"
+                                 referrerpolicy="no-referrer" {# Attempt to prevent sending referrer #}
+                                 onerror="this.style.display='none'; if (!this.parentElement.querySelector('.external-error-message')) { this.parentElement.insertAdjacentHTML('beforeend', '<div class=\'text-danger small external-error-message\'>外部图片无法加载<br><a href=\'{{ item.view_url | e }}\' target=\'_blank\' rel=\'noopener noreferrer\' class=\'btn btn-sm btn-link p-0\'>尝试打开原始链接</a></div>'); } this.onerror=null;"
                                  style="object-fit: contain; cursor: pointer;"
                                  >
                         </a>
                         <span class="filename" title="{{ item.name }}">{{ item.name | truncate(60) }}</span> {# Truncate long URLs #}
                         <div class="actions">
                             <button type="button" class="btn btn-sm btn-outline-info edit-external-link-btn" title="编辑外链" data-bs-toggle="modal" data-bs-target="#editExternalLinkModal" data-link-id="{{ item.id }}" data-link-url="{{ item.view_url }}">✏️</button>
-                            <form action="{{ url_for('delete_external_link', category_name=category_name, link_id=item.id) }}" method="post" class="d-inline" onsubmit="return confirm('确定要删除这个外部链接吗？\n{{ item.view_url }}');">
+                            <form action="{{ url_for('delete_external_link', category_name=category_name, link_id=item.id) }}" method="post" class="d-inline" onsubmit="return confirm('确定要删除这个外部链接吗？ {{ item.view_url | e }}');">
                                 <button type="submit" class="btn btn-sm btn-outline-danger" title="删除外链">🗑️</button>
                             </form>
                         </div>
@@ -721,7 +722,23 @@ document.querySelectorAll('.image-card').forEach(card => {
             return;
         }
 
-        // Not in batch mode, proceed to show preview modal
+        // --- START MODIFICATION for sub-link ---
+        // Check if the actual click target was the "尝试打开原始链接" sub-link
+        // The sub-link has classes: 'btn', 'btn-sm', 'btn-link', 'p-0'
+        const clickedSubLink = event.target.closest('a.btn.btn-link');
+        // Also check if the main image for this card has indeed failed (is hidden)
+        // This ensures we only bypass modal for the error-case sub-link.
+        const mainImageInCard = this.querySelector('img.img-thumbnail');
+
+        if (clickedSubLink && mainImageInCard && mainImageInCard.style.display === 'none') {
+            // Click was on the "尝试打开原始链接" for a failed image.
+            // Allow the link's default action (open in new tab). Do not open preview modal.
+            // console.log('Clicked on "尝试打开原始链接", allowing default action.');
+            return;
+        }
+        // --- END MODIFICATION for sub-link ---
+
+        // Not in batch mode, and not the error sub-link, proceed to show preview modal
         const itemId = this.dataset.itemId;
         const itemType = this.dataset.itemType;
 
