@@ -1,4 +1,5 @@
 import os
+import time
 import random
 import datetime
 import json
@@ -467,75 +468,110 @@ def stream_url_download_progress(): # New function name
         
         processed_count = 0
         for index, image_url in enumerate(image_urls):
-            progress_item_id = f"task-{task_id}-item-{index}" # Unique ID for frontend element
-            
+            progress_item_id = f"task-{task_id}-item-{index}"
             app.logger.info(f"[Task {task_id} - Item {progress_item_id}] 处理 URL: {image_url}")
             yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '准备中', 'progress': 0})}\n\n"
             
-            try:
-                parsed_url = urlparse(image_url)
-                if not all([parsed_url.scheme, parsed_url.netloc]) or parsed_url.scheme not in ('http', 'https'):
-                    raise ValueError("无效的 URL 格式或协议")
-                clean_url = urlunparse((parsed_url.scheme, parsed_url.netloc, parsed_url.path, parsed_url.params, parsed_url.query, ''))
+            MAX_RETRIES = 3
+            CONNECT_TIMEOUT = 5 # seconds
+            READ_TIMEOUT = 15   # seconds for reading chunks (per chunk, effectively)
 
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
-                response = requests.get(clean_url, stream=True, timeout=20, headers=headers)
-                response.raise_for_status()
-                
-                content_type = response.headers.get('content-type')
-                content_type_main = content_type.split(';')[0].strip().lower() if content_type else ''
-                if content_type_main not in ('image/jpeg', 'image/png', 'image/gif'):
-                    raise ValueError(f'不支持的内容类型: {content_type_main or "未知"}')
+            success = False
+            last_exception_message = "未知错误"
+            # Fixed timestamp for this item's processing to ensure consistent filename if retries save successfully
+            item_timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
 
-                file_extension = mimetypes.guess_extension(content_type_main)
-                if not file_extension or file_extension.lstrip('.').lower() not in ALLOWED_EXTENSIONS:
-                    _, ext_from_url = os.path.splitext(os.path.basename(parsed_url.path))
-                    if ext_from_url and ext_from_url.lstrip('.').lower() in ALLOWED_EXTENSIONS:
-                        file_extension = ext_from_url
-                    else:
-                        raise ValueError('无法确定有效扩展名')
-                
-                original_filename = os.path.basename(parsed_url.path) or "image"
-                filename_base, _ = os.path.splitext(original_filename)
-                safe_filename_base = secure_filename(filename_base)
-                if not safe_filename_base: safe_filename_base = "image"
-                timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
-                safe_extension = file_extension.lower()
-                if not safe_extension.startswith('.'): safe_extension = '.' + safe_extension
-                new_filename = f"{safe_filename_base}_{timestamp}{safe_extension}"
-                save_path = os.path.join(category_path, new_filename)
-                
-                total_size_str = response.headers.get('content-length')
-                total_size = int(total_size_str) if total_size_str and total_size_str.isdigit() else None
-                
-                downloaded_size = 0
-                last_yield_time = datetime.datetime.now()
+            for attempt in range(MAX_RETRIES):
+                try:
+                    app.logger.info(f"[Task {task_id} - Item {progress_item_id}] Attempt {attempt + 1}/{MAX_RETRIES} for URL: {image_url}")
+                    
+                    parsed_url = urlparse(image_url)
+                    if not all([parsed_url.scheme, parsed_url.netloc]) or parsed_url.scheme not in ('http', 'https'):
+                        raise ValueError("无效的 URL 格式或协议")
+                    clean_url = urlunparse((parsed_url.scheme, parsed_url.netloc, parsed_url.path, parsed_url.params, parsed_url.query, ''))
+                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
 
-                yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '下载中', 'progress': 0, 'downloaded': 0, 'total': total_size})}\n\n"
+                    response = requests.get(clean_url, stream=True, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT), headers=headers)
+                    response.raise_for_status()
+                    
+                    content_type = response.headers.get('content-type')
+                    content_type_main = content_type.split(';')[0].strip().lower() if content_type else ''
+                    if content_type_main not in ('image/jpeg', 'image/png', 'image/gif'):
+                        raise ValueError(f'不支持的内容类型: {content_type_main or "未知"}')
 
-                with open(save_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded_size += len(chunk)
-                            now = datetime.datetime.now()
-                            if (now - last_yield_time).total_seconds() > 0.1 or (total_size is not None and downloaded_size == total_size):
-                                progress_percent = -1
-                                if total_size is not None and total_size > 0:
-                                    progress_percent = round((downloaded_size / total_size) * 100)
-                                
-                                yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '下载中', 'progress': progress_percent, 'downloaded': downloaded_size, 'total': total_size})}\n\n"
-                                last_yield_time = now
+                    file_extension = mimetypes.guess_extension(content_type_main)
+                    if not file_extension or file_extension.lstrip('.').lower() not in ALLOWED_EXTENSIONS:
+                        _, ext_from_url = os.path.splitext(os.path.basename(parsed_url.path))
+                        if ext_from_url and ext_from_url.lstrip('.').lower() in ALLOWED_EXTENSIONS:
+                            file_extension = ext_from_url
+                        else:
+                            raise ValueError('无法确定有效扩展名')
+                    
+                    original_filename = os.path.basename(parsed_url.path) or "image"
+                    filename_base, _ = os.path.splitext(original_filename)
+                    safe_filename_base = secure_filename(filename_base)
+                    if not safe_filename_base: safe_filename_base = "image"
+                    
+                    safe_extension = file_extension.lower()
+                    if not safe_extension.startswith('.'): safe_extension = '.' + safe_extension
+                    new_filename = f"{safe_filename_base}_{item_timestamp}{safe_extension}" # Use item_timestamp
+                    save_path = os.path.join(category_path, new_filename)
+                    
+                    total_size_str = response.headers.get('content-length')
+                    total_size = int(total_size_str) if total_size_str and total_size_str.isdigit() else None
+                    
+                    downloaded_size = 0
+                    last_yield_time = datetime.datetime.now()
+
+                    yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': f'下载中 (尝试 {attempt + 1})', 'progress': 0, 'downloaded': 0, 'total': total_size})}\n\n"
+
+                    with open(save_path, 'wb') as f: # Overwrites or creates file for each attempt
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded_size += len(chunk)
+                                now = datetime.datetime.now()
+                                if (now - last_yield_time).total_seconds() > 0.2 or \
+                                   (total_size is not None and downloaded_size == total_size) or \
+                                   (total_size is None and (now - last_yield_time).total_seconds() > 1):
+                                    progress_percent = -1
+                                    if total_size is not None and total_size > 0:
+                                        progress_percent = round((downloaded_size / total_size) * 100)
+                                    
+                                    yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': f'下载中 (尝试 {attempt + 1})', 'progress': progress_percent, 'downloaded': downloaded_size, 'total': total_size})}\n\n"
+                                    last_yield_time = now
+                    
+                    app.logger.info(f"[Task {task_id} - Item {progress_item_id}] Attempt {attempt + 1} Succeeded. Saved as: {new_filename}")
+                    yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '完成', 'progress': 100, 'new_filename': new_filename, 'message': '上传成功'})}\n\n"
+                    success = True
+                    processed_count +=1
+                    break
+
+                except requests.exceptions.Timeout as e_timeout:
+                    last_exception_message = f'下载超时 (尝试 {attempt + 1}/{MAX_RETRIES})'
+                    app.logger.warning(f"[Task {task_id} - Item {progress_item_id}] {last_exception_message}: {e_timeout}")
+                    if attempt < MAX_RETRIES - 1:
+                        yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': f'超时，重试中... ({attempt + 2}/{MAX_RETRIES})', 'progress': 0, 'message': last_exception_message})}\n\n"
+                        time.sleep(1)
+                    # Error for last attempt handled by 'if not success' block
                 
-                app.logger.info(f"[Task {task_id} - Item {progress_item_id}] 下载完成: {new_filename}")
-                yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '完成', 'progress': 100, 'new_filename': new_filename, 'message': '上传成功'})}\n\n"
-                processed_count +=1
-            except requests.exceptions.RequestException as e:
-                app.logger.warning(f"[Task {task_id} - Item {progress_item_id}] Error downloading URL {image_url}: {e}")
-                yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '错误', 'progress': 0, 'message': f'下载失败: {str(e)}'})}\n\n"
-            except (IOError, ValueError, Exception) as e:
-                app.logger.warning(f"[Task {task_id} - Item {progress_item_id}] Error processing URL {image_url}: {e}", exc_info=True)
-                yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '错误', 'progress': 0, 'message': f'处理失败: {str(e)}'})}\n\n"
+                except requests.exceptions.RequestException as e_req:
+                    last_exception_message = f'网络错误 (尝试 {attempt + 1}/{MAX_RETRIES})'
+                    app.logger.warning(f"[Task {task_id} - Item {progress_item_id}] {last_exception_message}: {e_req}")
+                    if attempt < MAX_RETRIES - 1:
+                         yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': f'网络错误，重试中... ({attempt + 2}/{MAX_RETRIES})', 'progress': 0, 'message': last_exception_message})}\n\n"
+                         time.sleep(1)
+                    # Error for last attempt handled by 'if not success' block
+
+                except (IOError, ValueError, Exception) as e_proc:
+                    last_exception_message = f'处理失败: {str(e_proc)}'
+                    app.logger.warning(f"[Task {task_id} - Item {progress_item_id}] {last_exception_message}", exc_info=True)
+                    success = False
+                    break
+
+            if not success:
+                app.logger.error(f"[Task {task_id} - Item {progress_item_id}] URL {image_url} failed after {MAX_RETRIES} attempts or due to non-retryable error. Last error: {last_exception_message}")
+                yield f"event: progress\ndata: {json.dumps({'id': progress_item_id, 'url': image_url, 'status': '错误', 'progress': 0, 'message': last_exception_message})}\n\n"
         
         app.logger.info(f"[Task {task_id}] 所有 URL 处理完毕. Processed: {processed_count}/{len(image_urls)}")
         yield f"event: end\ndata: {json.dumps({'message': f'任务 {task_id} 处理完毕。成功处理 {processed_count} / {len(image_urls)} 个 URL。'})}\n\n"
