@@ -4,7 +4,7 @@ services:
   web:
     build: .
     ports:
-      - "5000:5000"
+      - "45000:5000"
     volumes:
       # 映射宿主机的 ./emoticons 目录到容器内的 /app/emoticons 目录
       # 请确保宿主机上存在 ./emoticons 目录，或者根据您的实际路径调整
