@@ -111,6 +111,16 @@
             -moz-user-select: none; /* Firefox */
             -ms-user-select: none; /* IE/Edge */
         }
+        /* Style for filename in delete confirmation modal */
+        #deleteConfirmFilename {
+            word-break: break-all; /* Ensure long filenames wrap */
+            display: inline-block; /* Helps with word-break in some cases */
+        }
+        /* Style for filename in rename modal */
+        #renameModalOldFilename {
+            word-break: break-all; /* Ensure long filenames wrap */
+            display: inline-block;
+        }
         .modal-nav-btn {
             position: absolute;
             top: 50%;
@@ -376,8 +386,8 @@
                         <span class="filename" title="{{ item.name }}">{{ item.name | truncate(60) }}</span> {# Truncate long URLs #}
                         <div class="actions">
                             <button type="button" class="btn btn-sm btn-outline-info edit-external-link-btn" title="编辑外链" data-bs-toggle="modal" data-bs-target="#editExternalLinkModal" data-link-id="{{ item.id }}" data-link-url="{{ item.view_url }}">✏️</button>
-                            <form action="{{ url_for('delete_external_link', category_name=category_name, link_id=item.id) }}" method="post" class="d-inline" onsubmit="return confirm('确定要删除这个外部链接吗？ {{ item.view_url | e }}');">
-                                <button type="submit" class="btn btn-sm btn-outline-danger" title="删除外链">🗑️</button>
+                            <form id="deleteExternalLinkForm-{{ item.id }}" action="{{ url_for('delete_external_link', category_name=category_name, link_id=item.id) }}" method="post" class="d-inline">
+                                <button type="button" class="btn btn-sm btn-outline-danger delete-external-link-btn" title="删除外链" data-link-id="{{ item.id }}" data-link-url="{{ item.view_url | e }}" data-form-id="deleteExternalLinkForm-{{ item.id }}">🗑️</button>
                             </form>
                         </div>
                     {% endif %}
@@ -518,6 +528,27 @@
   </div>
 </div>
 
+<!-- Delete External Link Confirmation Modal -->
+<div class="modal fade" id="deleteExternalLinkConfirmModal" tabindex="-1" aria-labelledby="deleteExternalLinkConfirmModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="deleteExternalLinkConfirmModalLabel">确认删除外部链接</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>您确定要删除外部链接:</p>
+        <p><strong id="deleteExternalLinkConfirmUrl" style="word-break: break-all;"></strong></p>
+        <p>此操作无法撤销。</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-danger" id="deleteExternalLinkConfirmBtn">确认删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Hidden Form for Delete Actions (Single and Batch) -->
 <form id="deleteImageForm" method="post" style="display: none;">
     <!-- Filenames will be added dynamically for batch delete -->
@@ -651,6 +682,12 @@ const deleteConfirmBtn = document.getElementById('deleteConfirmBtn');
 // --- Hidden Delete Form ---
 const deleteFormRef = document.getElementById('deleteImageForm');
 
+// --- Delete External Link Modal References ---
+const deleteExternalLinkConfirmModalElement = document.getElementById('deleteExternalLinkConfirmModal');
+const deleteExternalLinkConfirmModal = deleteExternalLinkConfirmModalElement ? new bootstrap.Modal(deleteExternalLinkConfirmModalElement) : null;
+const deleteExternalLinkConfirmUrlSpan = document.getElementById('deleteExternalLinkConfirmUrl');
+const deleteExternalLinkConfirmBtn = document.getElementById('deleteExternalLinkConfirmBtn');
+
 const previewNavFeedback = document.getElementById('previewNavFeedback');
 let feedbackTimeout = null;
 
@@ -721,6 +758,13 @@ document.querySelectorAll('.image-card').forEach(card => {
             // The selection logic is primary here.
             return;
         }
+
+        // **** 新增检查：如果点击发生在 .actions div 内部，则不执行后续操作 ****
+        if (event.target.closest('.actions')) {
+            // console.log('点击发生在 .actions div 内部，不打开预览弹窗。');
+            return;
+        }
+        // **** 新增检查结束 ****
 
         // --- START MODIFICATION for sub-link ---
         // Check if the actual click target was the "尝试打开原始链接" sub-link
@@ -827,16 +871,37 @@ modalDeleteBtn.addEventListener('click', function() {
         deleteConfirmBtn.dataset.itemType = 'local'; // Explicitly set type
         deleteConfirmModal.show();
     } else if (itemType === 'external') {
-        // For external links, directly confirm and then POST to delete_external_link endpoint
-        if (confirm(`确定要删除这个外部链接吗？\n${itemName}`)) {
-            const deleteUrl = `/admin/category/${encodeURIComponent(categoryName)}/external_link/${encodeURIComponent(itemId)}/delete`;
-            // Use a temporary form to POST, similar to how individual external link delete works
-            const tempForm = document.createElement('form');
-            tempForm.method = 'post';
-            tempForm.action = deleteUrl;
-            tempForm.style.display = 'none';
-            document.body.appendChild(tempForm);
-            tempForm.submit(); // This will cause a page reload
+        // For external links, use the styled confirmation modal
+        if (deleteExternalLinkConfirmModal) { // Check if the Bootstrap Modal instance exists
+            if (deleteExternalLinkConfirmUrlSpan && deleteExternalLinkConfirmBtn) { // Then check for its components
+                deleteExternalLinkConfirmUrlSpan.textContent = itemName; // itemName is the URL for external links
+                // Store necessary info on the confirm button of the *external link delete modal*
+                deleteExternalLinkConfirmBtn.dataset.deleteCategoryName = categoryName;
+                deleteExternalLinkConfirmBtn.dataset.deleteLinkId = itemId;
+                // Clear formIdToSubmit if it was set from card view, as this is from preview
+                delete deleteExternalLinkConfirmBtn.dataset.formIdToSubmit;
+                deleteExternalLinkConfirmModal.show();
+            } else {
+                console.error('External link delete confirmation modal INNER elements (UrlSpan or ConfirmBtn) not found! Falling back to native confirm.');
+                // Fallback to old confirm if inner elements are missing
+                if (confirm(`确定要删除这个外部链接吗？\n${itemName}`)) {
+                    const deleteUrl = `/admin/category/${encodeURIComponent(categoryName)}/external_link/${encodeURIComponent(itemId)}/delete`;
+                    const tempForm = document.createElement('form');
+                    tempForm.method = 'post'; tempForm.action = deleteUrl; tempForm.style.display = 'none';
+                    document.body.appendChild(tempForm);
+                    tempForm.submit();
+                }
+            }
+        } else {
+            console.error('External link delete confirmation modal INSTANCE (deleteExternalLinkConfirmModal) not found! Falling back to native confirm.');
+            // Fallback to old confirm if modal instance itself is missing
+            if (confirm(`确定要删除这个外部链接吗？\n${itemName}`)) {
+                const deleteUrl = `/admin/category/${encodeURIComponent(categoryName)}/external_link/${encodeURIComponent(itemId)}/delete`;
+                const tempForm = document.createElement('form');
+                tempForm.method = 'post'; tempForm.action = deleteUrl; tempForm.style.display = 'none';
+                document.body.appendChild(tempForm);
+                tempForm.submit();
+            }
         }
     }
 });
@@ -1027,7 +1092,7 @@ renameConfirmFinalBtn.addEventListener('click', function() {
 
 // --- Refined Confirmation Modal Z-index Handling ---
 // Listen for when confirmation modals are about to be shown
-[renameModalElementRef, deleteConfirmModalElement, renameConfirmModalElement].forEach(modalElem => {
+[renameModalElementRef, deleteConfirmModalElement, renameConfirmModalElement, deleteExternalLinkConfirmModalElement].forEach(modalElem => {
     if (modalElem) { // Ensure element exists
         modalElem.addEventListener('show.bs.modal', function (event) {
             // Check if the preview modal is currently shown
@@ -1337,6 +1402,106 @@ if (editExternalLinkForm) {
         }
         // Submission will proceed as a normal form POST if not prevented
     });
+}
+
+// --- External Link Delete Button Handling ---
+if (deleteExternalLinkConfirmModal) {
+    document.querySelectorAll('.delete-external-link-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const linkUrl = this.dataset.linkUrl;
+            const formId = this.dataset.formId;
+
+            if (deleteExternalLinkConfirmUrlSpan) {
+                deleteExternalLinkConfirmUrlSpan.textContent = linkUrl;
+            }
+            if (deleteExternalLinkConfirmBtn) {
+                deleteExternalLinkConfirmBtn.dataset.formIdToSubmit = formId;
+            }
+            deleteExternalLinkConfirmModal.show();
+        });
+    });
+
+    if (deleteExternalLinkConfirmBtn) {
+        deleteExternalLinkConfirmBtn.addEventListener('click', function() {
+            const formIdToSubmit = this.dataset.formIdToSubmit;
+            if (formIdToSubmit) {
+                const formToSubmit = document.getElementById(formIdToSubmit);
+                if (formToSubmit) {
+                    formToSubmit.submit();
+                } else {
+                    console.error('Could not find form to submit for external link deletion:', formIdToSubmit);
+                    createFlashMessage('删除外部链接时发生错误，未能找到提交表单。', 'danger');
+                }
+            }
+            deleteExternalLinkConfirmModal.hide();
+        });
+    }
+}
+
+// --- External Link Delete Button Handling (both from card and from preview modal's confirm) ---
+if (deleteExternalLinkConfirmModal) {
+    // Listener for delete buttons on individual external link cards
+    document.querySelectorAll('.delete-external-link-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const linkUrl = this.dataset.linkUrl;
+            const formId = this.dataset.formId; // ID of the form on the card
+
+            if (deleteExternalLinkConfirmUrlSpan) {
+                deleteExternalLinkConfirmUrlSpan.textContent = linkUrl;
+            }
+            if (deleteExternalLinkConfirmBtn) {
+                // When triggered from card, set formIdToSubmit
+                deleteExternalLinkConfirmBtn.dataset.formIdToSubmit = formId;
+                // Clear any data that might be from preview modal context
+                delete deleteExternalLinkConfirmBtn.dataset.deleteCategoryName;
+                delete deleteExternalLinkConfirmBtn.dataset.deleteLinkId;
+            }
+            deleteExternalLinkConfirmModal.show();
+        });
+    });
+
+    // Listener for the "Confirm Delete" button in the #deleteExternalLinkConfirmModal
+    if (deleteExternalLinkConfirmBtn) {
+        deleteExternalLinkConfirmBtn.addEventListener('click', function() {
+            const catNameFromPreview = this.dataset.deleteCategoryName;
+            const linkIdFromPreview = this.dataset.deleteLinkId;
+            const formIdFromCard = this.dataset.formIdToSubmit;
+
+            let actionTaken = false;
+
+            if (catNameFromPreview && linkIdFromPreview) {
+                // This path is taken when deletion is initiated from the #imagePreviewModal
+                console.log(`Confirming delete for external link (from preview modal): Category: ${catNameFromPreview}, Link ID: ${linkIdFromPreview}`);
+                const deleteUrl = `/admin/category/${encodeURIComponent(catNameFromPreview)}/external_link/${encodeURIComponent(linkIdFromPreview)}/delete`;
+                const tempForm = document.createElement('form');
+                tempForm.method = 'post';
+                tempForm.action = deleteUrl;
+                tempForm.style.display = 'none';
+                document.body.appendChild(tempForm);
+                tempForm.submit(); // This will cause a page reload
+                actionTaken = true;
+            } else if (formIdFromCard) {
+                // This path is taken when deletion is initiated from an .image-card
+                console.log(`Confirming delete for external link (from card): Form ID: ${formIdFromCard}`);
+                const formToSubmit = document.getElementById(formIdFromCard);
+                if (formToSubmit) {
+                    formToSubmit.submit(); // This will cause a page reload
+                    actionTaken = true;
+                } else {
+                    console.error('Could not find form to submit for external link deletion (card):', formIdFromCard);
+                    createFlashMessage('删除外部链接时发生错误，未能找到提交表单。', 'danger');
+                }
+            } else {
+                 console.error('Missing data on external link delete confirm button. Cannot determine action.');
+                 createFlashMessage('删除外部链接时发生内部错误，缺少必要信息。', 'danger');
+            }
+            
+            // Always hide the modal if an action was attempted or data was present
+            if (actionTaken || catNameFromPreview || linkIdFromPreview || formIdFromCard) {
+                 deleteExternalLinkConfirmModal.hide();
+            }
+        });
+    }
 }
 
 // The block starting at line 1117 now handles the unified logic.
