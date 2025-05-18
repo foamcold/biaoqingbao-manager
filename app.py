@@ -253,6 +253,62 @@ def delete_category(category_name):
 
     return redirect(url_for('admin'))
 
+@app.route('/admin/rename_category/<path:old_category_name>', methods=['POST'])
+@login_required
+def rename_category(old_category_name):
+    if not is_valid_category_name(old_category_name):
+        flash('无效的原始分类名称。', 'danger')
+        return redirect(url_for('admin'))
+
+    new_category_name_raw = request.form.get('new_category_name', '')
+    new_category_name = new_category_name_raw.strip()
+
+    if not is_valid_category_name(new_category_name):
+        flash('无效的新分类名称。名称不能为空，且不能包含 / 或 \\', 'warning')
+        return redirect(url_for('admin', page=request.args.get('page', 1))) # Preserve pagination
+
+    if old_category_name == new_category_name:
+        flash('新旧分类名称相同，未做任何更改。', 'info')
+        return redirect(url_for('admin', page=request.args.get('page', 1)))
+
+    emoticons_base_path = app.config['EMOTICONS_FOLDER']
+    old_category_path = os.path.join(emoticons_base_path, old_category_name)
+    new_category_path = os.path.join(emoticons_base_path, new_category_name)
+
+    if not os.path.isdir(old_category_path):
+        flash(f'原始分类 "{old_category_name}" 不存在。', 'warning')
+        return redirect(url_for('admin', page=request.args.get('page', 1)))
+
+    if os.path.exists(new_category_path):
+        flash(f'目标分类名称 "{new_category_name}" 已存在，请使用其他名称。', 'warning')
+        return redirect(url_for('admin', page=request.args.get('page', 1)))
+
+    try:
+        os.rename(old_category_path, new_category_path)
+        flash(f'分类已从 "{old_category_name}" 重命名为 "{new_category_name}"。', 'success')
+
+        # Update session cache if necessary (e.g., last_shown_v2)
+        last_shown_v2 = session.get('last_shown_v2', {})
+        if old_category_name in last_shown_v2:
+            last_shown_v2[new_category_name] = last_shown_v2.pop(old_category_name)
+            session['last_shown_v2'] = last_shown_v2
+            session.modified = True
+        
+        # Also update 'last_shown' if it's still in use for some reason
+        last_shown_old_format = session.get('last_shown', {})
+        if old_category_name in last_shown_old_format:
+            last_shown_old_format[new_category_name] = last_shown_old_format.pop(old_category_name)
+            session['last_shown'] = last_shown_old_format
+            session.modified = True
+
+
+    except OSError as e:
+        app.logger.error(f"Error renaming category '{old_category_name}' to '{new_category_name}': {e}")
+        flash(f'重命名分类时出错: {e}', 'danger')
+    
+    return redirect(url_for('admin', page=request.args.get('page', 1)))
+
+
 @app.route('/admin/category/<path:category_name>')
 @login_required
 def view_category(category_name):
@@ -779,29 +835,53 @@ def serve_random_emoticon(category_name):
     if chosen_item['type'] == 'local':
         return send_from_directory(chosen_item['path'], chosen_item['filename'])
     elif chosen_item['type'] == 'external':
-        # Before redirecting, ensure the URL is somewhat safe (already validated on input, but good practice)
-        parsed_url = urlparse(chosen_item['url'])
-        if parsed_url.scheme in ['http', 'https'] and parsed_url.netloc:
-             return redirect(chosen_item['url'])
-        else:
-            app.logger.warning(f"Attempted to redirect to an invalid external URL: {chosen_item['url']}")
-            # Fallback: if the chosen external URL is invalid, try to serve another random item
-            # This is a simple fallback; a more robust solution might re-select or error differently.
-            if len(all_available_items) > 1:
-                # Try to pick another one, excluding the problematic one
-                remaining_items = [item for item in all_available_items if item['id'] != chosen_item['id'] or item['type'] != chosen_item['type']]
-                if remaining_items:
-                    fallback_item = random.choice(remaining_items)
-                    # Update session for the fallback item
-                    last_shown_map[category_name] = {'id': fallback_item['id'], 'type': fallback_item['type']}
-                    session['last_shown_v2'] = last_shown_map
-                    session.modified = True
-                    if fallback_item['type'] == 'local':
-                        return send_from_directory(fallback_item['path'], fallback_item['filename'])
-                    elif fallback_item['type'] == 'external' and urlparse(fallback_item['url']).scheme in ['http', 'https']:
-                        return redirect(fallback_item['url'])
-            # If all else fails or only one item which is bad
-            abort(500) # Or a more specific error
+        external_url = chosen_item['url']
+        parsed_url = urlparse(external_url)
+
+        if not (parsed_url.scheme in ['http', 'https'] and parsed_url.netloc):
+            app.logger.error(f"serve_random_emoticon: Malformed external URL in database for proxy: {external_url}")
+            # If the URL stored is fundamentally malformed, it's an internal data issue.
+            abort(500)
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.85 Safari/537.36',
+            'Referer': '' # Attempt to send no referrer. Adjust if specific sites require a different strategy.
+        }
+        try:
+            # Using stream=True to handle response efficiently and get headers first
+            proxied_response = requests.get(external_url, headers=headers, timeout=(5, 15), stream=True) # (connect_timeout, read_timeout)
+            proxied_response.raise_for_status()  # Raise an exception for HTTP errors (4xx or 5xx)
+
+            content_type_header = proxied_response.headers.get('Content-Type')
+            content_type = content_type_header.lower() if content_type_header else ''
+
+            if not content_type.startswith('image/'):
+                app.logger.warning(f"Proxied URL {external_url} returned non-image content-type: {content_type_header}")
+                abort(415) # Unsupported Media Type
+
+            # Stream the content back to the client
+            return Response(proxied_response.iter_content(chunk_size=8192),
+                            mimetype=content_type_header, # Use original Content-Type header from source
+                            status=proxied_response.status_code)
+
+        except requests.exceptions.Timeout:
+            app.logger.error(f"Timeout when proxying external image {external_url} for category {category_name}")
+            abort(504) # Gateway Timeout
+        except requests.exceptions.HTTPError as e:
+            # Log the error and the status code from the external server
+            app.logger.error(f"HTTP error {e.response.status_code} when proxying {external_url} for {category_name}. Response: {e.response.text[:200]}")
+            # Relay the original error status code if it's a client-side error (e.g. 403, 404 from origin)
+            # For server-side errors from origin (5xx), return 502 Bad Gateway.
+            if 400 <= e.response.status_code < 500:
+                 abort(e.response.status_code)
+            else:
+                 abort(502) # Bad Gateway
+        except requests.exceptions.RequestException as e:
+            app.logger.error(f"Network or request error when proxying external image {external_url} for {category_name}: {e}")
+            abort(502)  # Bad Gateway
+        except Exception as e:
+            app.logger.error(f"Unexpected error proxying external image {external_url} for {category_name}: {e}", exc_info=True)
+            abort(500) # Internal Server Error
     else:
         # Should not happen if types are only 'local' or 'external'
         app.logger.error(f"Unknown item type encountered: {chosen_item.get('type')}")

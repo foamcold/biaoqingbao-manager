@@ -244,7 +244,8 @@
                              onerror="this.style.display='none';"> <!-- Hide if image fails -->
                         <div class="category-actions">
                             <a href="{{ url_for('view_category', category_name=category) }}" class="btn btn-sm btn-primary">查看</a>
-                            <form action="{{ url_for('delete_category', category_name=category) }}" method="post" onsubmit="return confirm('确定要删除分类 \'{{ category }}\' 及其所有内容吗？这也会删除其中所有图片！');">
+                            <button type="button" class="btn btn-sm btn-warning rename-category-btn" data-bs-toggle="modal" data-bs-target="#renameCategoryModal" data-category-name="{{ category }}">重命名</button>
+                            <form action="{{ url_for('delete_category', category_name=category) }}" method="post" onsubmit="return confirm('确定要删除分类 \'{{ category }}\' 及其所有内容吗？这也会删除其中所有图片！');" style="margin-left: 0.5rem;">
                                 <button type="submit" class="btn btn-danger btn-sm">删除</button>
                             </form>
                         </div>
@@ -1041,6 +1042,35 @@ document.addEventListener('DOMContentLoaded', (event) => {
     }
 
     // Add console logs or other checks if needed
+
+    // --- Rename Category Modal Handling ---
+    const renameCategoryModalElement = document.getElementById('renameCategoryModal');
+    if (renameCategoryModalElement) {
+        const renameCategoryModal = new bootstrap.Modal(renameCategoryModalElement);
+        const renameCategoryForm = document.getElementById('renameCategoryForm');
+        const oldCategoryNameSpan = document.getElementById('oldCategoryNameSpan');
+        const newCategoryNameInput = document.getElementById('newCategoryNameInput');
+        const hiddenOldCategoryNameInput = document.getElementById('hiddenOldCategoryName');
+
+        document.querySelectorAll('.rename-category-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                const categoryName = this.dataset.categoryName;
+                oldCategoryNameSpan.textContent = categoryName;
+                newCategoryNameInput.value = categoryName;
+                hiddenOldCategoryNameInput.value = categoryName;
+                // Dynamically set the form action
+                renameCategoryForm.action = `/admin/rename_category/${encodeURIComponent(categoryName)}`;
+            });
+        });
+
+        // Optional: Clear input when modal is hidden
+        renameCategoryModalElement.addEventListener('hidden.bs.modal', function () {
+            newCategoryNameInput.value = '';
+            oldCategoryNameSpan.textContent = '';
+            hiddenOldCategoryNameInput.value = '';
+            renameCategoryForm.action = ''; // Clear action
+        });
+    }
 });
 </script>
 
@@ -1067,6 +1097,32 @@ document.addEventListener('DOMContentLoaded', (event) => {
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
         <button type="button" class="btn btn-danger" id="confirmBatchDeleteButton">确认删除</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Rename Category Modal -->
+<div class="modal fade" id="renameCategoryModal" tabindex="-1" aria-labelledby="renameCategoryModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="renameCategoryModalLabel">重命名分类</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form id="renameCategoryForm" method="POST"> {# Action will be set by JS #}
+        <div class="modal-body">
+          <p>当前分类名: <strong id="oldCategoryNameSpan"></strong></p>
+          <input type="hidden" id="hiddenOldCategoryName" name="old_category_name_hidden">
+          <div class="mb-3">
+            <label for="newCategoryNameInput" class="form-label">新分类名:</label>
+            <input type="text" class="form-control" id="newCategoryNameInput" name="new_category_name" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="submit" class="btn btn-primary">确认重命名</button>
+        </div>
+      </form>
     </div>
   </div>
 </div>
